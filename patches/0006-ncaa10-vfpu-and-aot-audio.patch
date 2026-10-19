@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000006 Mon Sep 17 00:00:00 2001
+From: Codex <codex@localhost>
+Date: Sun, 11 Oct 2026 22:00:00 -0400
+Subject: [PATCH 6/6] codegen: pack VI2S lanes and compile relocatable audio blobs
+
+NCAA Football 10 uses VI2S and loads Allegrex audio programs from EA banks.
+Compile those programs ahead of time, retaining guest-linked J/JAL targets.
+Allow one auto-codegen bucket to be regenerated during bring-up.
+---
+diff --git a/src/decoder.cpp b/src/decoder.cpp
+--- a/src/decoder.cpp
++++ b/src/decoder.cpp
+@@ -311,6 +311,9 @@
+             d.kind = OpcodeKind::Vx2i;
+             static constexpr const char *names[4]{"vuc2i", "vc2i", "vus2i", "vs2i"};
+             d.mnemonic = names[operation - 24u];
++        } else if (group == 1u && operation == 31u) {
++            d.kind = OpcodeKind::Vx2i;
++            d.mnemonic = "vi2s";
+         } else if (group >= 16u && group <= 19u) {
+             d.kind = OpcodeKind::Vf2i;
+             static constexpr const char *names[4]{"vf2in", "vf2iz", "vf2iu", "vf2id"};
+
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -430,6 +430,19 @@
+         const std::uint32_t destination = d.word & 0x7Fu;
+         const std::uint32_t source = (d.word >> 8u) & 0x7Fu;
+         const std::uint32_t operation = (d.word >> 16u) & 3u;
++        if (((d.word >> 16u) & 31u) == 31u) {
++            const auto result_length = (source_length + 1u) / 2u;
++            out << "    { float vfpu_s[4]{}, vfpu_d[4]{};\n"
++                << "      ctx.read_vfpu_vector(vfpu_s, " << source << "u, " << source_length << "u);\n"
++                << "      ctx.apply_vfpu_source_prefix(vfpu_s, 4u, 0u);\n"
++                << "      for (std::uint32_t lane = 0; lane < " << result_length << "u; ++lane) {\n"
++                << "        const auto lo = std::bit_cast<std::uint32_t>(vfpu_s[lane * 2u]) >> 16u;\n"
++                << "        const auto hi = std::bit_cast<std::uint32_t>(vfpu_s[lane * 2u + 1u]) & 0xFFFF0000u;\n"
++                << "        vfpu_d[lane] = std::bit_cast<float>(lo | hi);\n"
++                << "      }\n"
++                << "      ctx.write_vfpu_vector_with_destination_prefix(vfpu_d, " << destination << "u, " << result_length << "u); }\n";
++            break;
++        }
+         out << "    ctx.execute_vfpu_vx2i(" << destination << "u, " << source << "u, "
+             << source_length << "u, " << operation << "u);\n";
+         break;
+@@ -971,6 +984,7 @@
+     std::uint32_t unit_span_bytes{};
+     const std::map<std::uint32_t, std::uint16_t> *direct_entry_ids{};
+     const std::set<std::uint32_t> *import_stubs{};
++    bool relocatable_blob{};
+ };
+ 
+ std::string emit_function_source(const GeneratedFunctionInput &function,
+@@ -1108,6 +1122,18 @@
+                     }
+                 } else if (decoded.kind == psprecomp::OpcodeKind::J ||
+                            decoded.kind == psprecomp::OpcodeKind::Jal) {
++                    if (function.relocatable_blob) {
++                        // Asset code is linked by the guest after loading. Its
++                        // opcodes are compiled here; only the relocated target
++                        // field is read at execution time.
++                        body << "    jump_target = (rt.memory().load32(blob_base + "
++                             << pc - function.address << "u) & 0x03FFFFFFu) << 2u;\n";
++                        if (decoded.kind == psprecomp::OpcodeKind::Jal)
++                            body << "    ctx.set_gpr(31, " << psprecomp::hex32(pc + 8u) << "u);\n";
++                        body << emit_regular(slot, pc + 4u)
++                             << "    ctx.pc = jump_target; return;\n";
++                        break;
++                    }
+                     const std::uint32_t target = ((pc + 4u) & 0xF0000000u) | (decoded.target << 2u);
+                     if (decoded.kind == psprecomp::OpcodeKind::Jal) {
+                         body << "    ctx.set_gpr(31, " << psprecomp::hex32(pc + 8u) << "u);\n";
+@@ -1512,7 +1538,8 @@
+ int generate_auto(const std::filesystem::path &elf_path,
+                   const std::filesystem::path &output_dir,
+                   std::uint32_t load_base,
+-                  std::uint32_t unit_span_bytes) {
++                  std::uint32_t unit_span_bytes,
++                  std::uint32_t selected_bucket = UINT32_MAX) {
+     const auto elf = psprecomp::Elf32Image::from_file(elf_path);
+     psprecomp::GuestMemory memory;
+     (void)elf.load_and_relocate(memory, load_base);
+@@ -1596,6 +1623,8 @@
+         const std::string suffix_text = suffix.str();
+         const auto path = output_dir / ("generated_unit_" + suffix_text + ".cpp");
+         expected_cpp.insert(path.filename());
++        registered_entries += unit.entries.size();
++        if (selected_bucket != UINT32_MAX && unit.bucket != selected_bucket) continue;
+ 
+         const GeneratedFunctionInput generated_unit{
+             "recomp_unit_" + suffix_text,
+@@ -1631,7 +1660,6 @@
+         for (const auto label : unit.entries) {
+             out << "    runtime.register_function(" << psprecomp::hex32(label) << "u, &"
+                 << generated_unit.name << ", \"" << generated_unit.name << "\");\n";
+-            ++registered_entries;
+         }
+         out << "}\n} // namespace psprecomp\n";
+         rewritten_units += write_text_if_changed(path, out.str()) ? 1u : 0u;
+@@ -1691,9 +1719,46 @@
+ 
+ int main(int argc, char **argv) {
+     try {
++        if (argc == 5 && std::string_view(argv[1]) == "--blob") {
++            std::ifstream input(argv[2], std::ios::binary);
++            if (!input) throw psprecomp::Error("Cannot open raw code blob");
++            std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
++            if (bytes.empty() || bytes.size() % 4u) throw psprecomp::Error("Code blob must contain aligned Allegrex words");
++            constexpr std::uint32_t base = 0x08804000u;
++            psprecomp::GuestMemory memory;
++            for (std::size_t i = 0; i < bytes.size(); ++i) memory.store8(base + i, static_cast<std::uint8_t>(bytes[i]));
++            GeneratedFunctionInput function{argv[4], base, {}, {}};
++            function.relocatable_blob = true;
++            for (std::uint32_t i = 0; i < bytes.size(); i += 4u) {
++                function.instructions.insert(base + i);
++                function.entry_labels.insert(base + i);
++            }
++            std::string source = emit_function_source(function, memory, argv[4]);
++            // Convert only emitted PC literals to offsets; labels stay static.
++            const std::regex address("0x[0-9A-Fa-f]{8}u");
++            std::string relocated;
++            std::size_t cursor = 0;
++            for (auto i = std::sregex_iterator(source.begin(), source.end(), address); i != std::sregex_iterator(); ++i) {
++                const auto &match = *i;
++                const auto value = std::stoul(match.str().substr(2, 8), nullptr, 16);
++                relocated.append(source, cursor, match.position() - cursor);
++                relocated += value >= base && value <= base + bytes.size() + 8u
++                    ? "(blob_base + " + std::to_string(value - base) + "u)" : match.str();
++                cursor = match.position() + match.length();
++            }
++            relocated.append(source, cursor, std::string::npos);
++            const auto wrapper = relocated.find("void " + std::string(argv[4]) + "(Runtime &rt");
++            relocated.resize(wrapper);
++            const auto signature = relocated.find("GuestMemory::AotFastView &aot_mem) {");
++            relocated.replace(signature, std::string("GuestMemory::AotFastView &aot_mem) {").size(),
++                              "GuestMemory::AotFastView &aot_mem, std::uint32_t blob_base) {");
++            std::ofstream output(argv[3]);
++            output << relocated;
++            return 0;
++        }
+         if (argc >= 4 && std::string_view(argv[2]) == "--auto") {
+-            if (argc > 6) {
+-                std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n";
++            if (argc > 7) {
++                std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes] [selected_bucket]\n";
+                 return 2;
+             }
+             const std::uint32_t load_base = argc >= 5
+@@ -1703,12 +1768,15 @@
+                 ? static_cast<std::uint32_t>(std::stoul(argv[5], nullptr, 0))
+                 : 0x20000u;
+             if (unit_span == 0u || (unit_span & 3u) != 0u) throw psprecomp::Error("unit_span_bytes must be non-zero and 4-byte aligned");
+-            return generate_auto(argv[1], argv[3], load_base, unit_span);
++            const auto selected_bucket = argc >= 7
++                ? static_cast<std::uint32_t>(std::stoul(argv[6], nullptr, 0)) : UINT32_MAX;
++            return generate_auto(argv[1], argv[3], load_base, unit_span, selected_bucket);
+         }
+         if (argc == 4) return generate_manual(argv[1], argv[2], argv[3]);
+         std::cerr << "Usage:\n"
++                  << "  psp_recomp --blob <aligned_code.bin> <generated.inc> <name>\n"
+                   << "  psp_recomp <ELF> <functions.csv> <generated_manifest.cpp>\n"
+-                  << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n";
++                  << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes] [selected_bucket]\n";
+         return 2;
+     } catch (const std::exception &e) {
+         std::cerr << "psp_recomp error: " << e.what() << "\n";
+-- 
+2.49.0

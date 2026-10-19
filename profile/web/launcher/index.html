@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>NCAA Football 10 Launcher</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --text: #1b1b1f; --muted: #66666f;
+    --border: #dcdcd8; --accent: #2f6fde; --err: #c23b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214; --panel: #1b1b1f; --text: #ececf0; --muted: #9a9aa6;
+      --border: #2c2c33; --accent: #6c9cff; --err: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  section { padding: 14px; margin: 0 0 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  section p { margin: 8px 0 0; color: var(--muted); }
+  label { display: block; font-weight: 600; margin: 10px 0 6px; }
+  input { max-width: 100%; font: inherit; }
+  button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; margin: 8px 8px 0 0; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: 0.5; }
+  code { font-size: 13px; }
+  .error { color: var(--err); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main id="launcher">
+  <h1>NCAA Football 10 Launcher</h1>
+  <p class="sub">Runs your own NCAA Football 10 PSP (ULUS10440) web build with your own ISO. This site hosts no game code or disc data.</p>
+  <p id="support" role="status">Preparing browser support…</p>
+
+  <section aria-labelledby="step-build">
+    <h2 id="step-build">1. Import your build</h2>
+    <p>Build NCAA from source, then run <code>python scripts/prepare_static_ncaa.py --output build/static-ncaa10</code>. Choose that folder. Every file is checked against its <code>static-manifest.json</code> and kept in this browser, so you only import it once per build.</p>
+    <label for="build-folder">Build folder</label>
+    <input id="build-folder" type="file" webkitdirectory multiple aria-describedby="build-message">
+    <label for="build-files">Or select the package files</label>
+    <input id="build-files" type="file" multiple aria-describedby="build-message">
+    <p id="build-message" role="status"></p>
+    <p id="build-summary">Checking for an imported build…</p>
+    <p>Players using a prepared static game site only need its ISO picker. This source-only site is an optional build importer.</p>
+  </section>
+
+  <details>
+    <summary>Developer tools</summary>
+    <p>The experimental <a href="translate/">translator</a> exports build inputs and currently rejects the tested NCAA disc's encryption tag. It cannot create or launch a playable web build by itself; a native build toolchain is still required.</p>
+  </details>
+
+  <section aria-labelledby="step-play">
+    <h2 id="step-play">2. Launch and choose your ISO</h2>
+    <p>The game page asks for an uncompressed NCAA Football 10 PSP US ISO and checks its title and executable revision against your build. The ISO is read locally in ranges and is never uploaded; choose it again after each reload.</p>
+    <button id="launch" class="primary" type="button" disabled>Launch</button>
+    <button id="remove" type="button" disabled>Remove imported build</button>
+  </section>
+
+  <p class="sub">Saves stay in this browser for this site; use <b>Export saves</b> in the game page to back them up. Import only packages you built yourself. <a href="../docs/STATIC_HOSTING.html#launcher">How this works</a>.</p>
+</main>
+<script src="launcher.js"></script>
+</body>
+</html>

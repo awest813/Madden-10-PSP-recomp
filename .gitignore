@@ -1,0 +1,26 @@
+# Your game files never go into the repository.
+/games/
+/Madden NFL 10 (USA)/
+*.iso
+*.cso
+*.zip
+*.pbp
+*.PBP
+*.BIN
+*.bin
+
+# Generated C++ is a translation of a game's code: keep it local.
+/profile/generated/
+
+# Fetched or built by scripts/setup.sh and the build scripts.
+/PSPRecomp/
+/tools/
+/build/
+
+*.ppm
+*.wav
+/frame*.png
+__pycache__/
+
+# Local editor and assistant settings.
+/.claude/

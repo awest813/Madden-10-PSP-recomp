@@ -1,0 +1,26 @@
+From e6f1483f086b2f28a743f44dc68928cb29c813d6 Mon Sep 17 00:00:00 2001
+From: Samir Nuri <samirnuri714@gmail.com>
+Date: Wed, 7 Oct 2026 13:06:52 +0200
+Subject: [PATCH 3/5] decoder: decode ADDI
+
+ADDI only differs from ADDIU in its overflow trap, which games do not rely on. God of War: Chains of Olympus uses it.
+---
+ src/decoder.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/decoder.cpp b/src/decoder.cpp
+index 8a11aff..9a771bf 100644
+--- a/src/decoder.cpp
++++ b/src/decoder.cpp
+@@ -117,6 +117,8 @@ DecodedInstruction decode_allegrex(std::uint32_t word) {
+     case 0x15: d.kind = OpcodeKind::Bnel; d.mnemonic = "bnel"; break;
+     case 0x16: d.kind = OpcodeKind::Blezl; d.mnemonic = "blezl"; break;
+     case 0x17: d.kind = OpcodeKind::Bgtzl; d.mnemonic = "bgtzl"; break;
++    // ADDI only differs from ADDIU by its overflow trap, which titles do not rely on.
++    case 0x08: d.kind = OpcodeKind::Addiu; d.mnemonic = "addi"; break;
+     case 0x09: d.kind = OpcodeKind::Addiu; d.mnemonic = "addiu"; break;
+     case 0x0A: d.kind = OpcodeKind::Slti; d.mnemonic = "slti"; break;
+     case 0x0B: d.kind = OpcodeKind::Sltiu; d.mnemonic = "sltiu"; break;
+-- 
+2.43.0
+

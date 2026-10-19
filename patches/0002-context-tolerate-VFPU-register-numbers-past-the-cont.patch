@@ -1,0 +1,44 @@
+From 21bdce830008ffd426aead06b92af684ce502cf8 Mon Sep 17 00:00:00 2001
+From: Samir Nuri <samirnuri714@gmail.com>
+Date: Wed, 7 Oct 2026 13:06:52 +0200
+Subject: [PATCH 2/5] context: tolerate VFPU register numbers past the control
+ registers
+
+Data that the analysis decodes as code can produce scalar register numbers of 144 and above. Those paths never run, so reads return zero and writes are dropped instead of failing the build with a static_assert.
+---
+ include/psprecomp/allegrex_context.hpp | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/include/psprecomp/allegrex_context.hpp b/include/psprecomp/allegrex_context.hpp
+index ea481f2..417658b 100644
+--- a/include/psprecomp/allegrex_context.hpp
++++ b/include/psprecomp/allegrex_context.hpp
+@@ -154,8 +154,11 @@ struct alignas(16) AllegrexContext {
+     // branch and the PSP VFPU lane shuffle disappear from the AOT hot path.
+     template <std::uint32_t ScalarRegister>
+     PSPRECOMP_CONTEXT_FORCEINLINE void set_vfpu_scalar_bits_ct(std::uint32_t value) noexcept {
+-        static_assert(ScalarRegister < 144u);
+-        if constexpr (ScalarRegister < 128u) {
++        // Encodings past the control registers only appear when data is
++        // decoded as code; such paths never execute, so ignore the write.
++        if constexpr (ScalarRegister >= 144u) {
++            (void)value;
++        } else if constexpr (ScalarRegister < 128u) {
+             constexpr std::size_t index = vfpu_scalar_index(ScalarRegister);
+             vfpu[index] = std::bit_cast<float>(value);
+         } else {
+@@ -165,8 +168,9 @@ struct alignas(16) AllegrexContext {
+ 
+     template <std::uint32_t ScalarRegister>
+     [[nodiscard]] PSPRECOMP_CONTEXT_FORCEINLINE std::uint32_t vfpu_scalar_bits_ct() const noexcept {
+-        static_assert(ScalarRegister < 144u);
+-        if constexpr (ScalarRegister < 128u) {
++        if constexpr (ScalarRegister >= 144u) {
++            return 0u;
++        } else if constexpr (ScalarRegister < 128u) {
+             constexpr std::size_t index = vfpu_scalar_index(ScalarRegister);
+             return std::bit_cast<std::uint32_t>(vfpu[index]);
+         } else {
+-- 
+2.43.0
+

@@ -1,0 +1,40 @@
+From db4fda79f432c2fbfc57d3a22cd87add67847263 Mon Sep 17 00:00:00 2001
+From: Samir Nuri <samirnuri714@gmail.com>
+Date: Wed, 7 Oct 2026 13:06:52 +0200
+Subject: [PATCH 5/5] analysis: seed functions at prologues that follow a
+ return
+
+Functions reached only through pointers the analysis cannot materialize (built at run time, or stored without relocations) were missed. A stack-allocating 'addiu sp, sp, -imm' right after a previous function's 'jr ra' and its delay slot (skipping alignment nops) is now a seed.
+---
+ src/program_analysis.cpp | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/program_analysis.cpp b/src/program_analysis.cpp
+index 6442e69..726595e 100644
+--- a/src/program_analysis.cpp
++++ b/src/program_analysis.cpp
+@@ -310,6 +310,21 @@ std::map<std::uint32_t, std::string> collect_initial_seeds(const Elf32Image &elf
+         if (site.type != 2u || !memory.contains(site.patch_address, 4u)) continue;
+         add_seed(seeds, ranges, memory.load32(site.patch_address), "relocated_r_mips32_code_pointer");
+     }
++    // Functions reached only through pointers the analysis cannot materialize
++    // (built at run time, or stored without relocations) still start with the
++    // usual prologue right after the previous function's `jr ra` + delay slot.
++    for (const auto &range : ranges) {
++        for (std::uint32_t pc = range.start; pc + 12u <= range.end; pc += 4u) {
++            if (memory.load32(pc) != 0x03E00008u) continue; // jr ra
++            std::uint32_t next = pc + 8u;
++            while (next + 4u <= range.end && memory.load32(next) == 0u) next += 4u; // alignment nops
++            if (next + 4u > range.end) continue;
++            const std::uint32_t word = memory.load32(next);
++            // addiu sp, sp, -imm
++            if ((word & 0xFFFF0000u) == 0x27BD0000u && (word & 0x8000u) != 0u)
++                add_seed(seeds, ranges, next, "prologue_after_return");
++        }
++    }
+     return seeds;
+ }
+ 
+-- 
+2.43.0
+

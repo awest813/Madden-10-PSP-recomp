@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>NCAA Football 10 Translator</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --text: #1b1b1f; --muted: #66666f;
+    --border: #dcdcd8; --accent: #2f6fde; --err: #c23b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214; --panel: #1b1b1f; --text: #ececf0; --muted: #9a9aa6;
+      --border: #2c2c33; --accent: #6c9cff; --err: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  section { padding: 14px; margin: 0 0 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  section p, section li { color: var(--muted); }
+  section p { margin: 8px 0 0; }
+  label { display: block; font-weight: 600; margin: 10px 0 6px; }
+  input { max-width: 100%; font: inherit; }
+  a.button { display: inline-block; margin-top: 10px; padding: 6px 14px; border-radius: 6px; background: var(--accent); color: #fff; text-decoration: none; }
+  code { font-size: 13px; }
+  pre { white-space: pre-wrap; font-size: 12px; margin: 8px 0 0; color: var(--muted); }
+  .error { color: var(--err); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main id="translator">
+  <h1>NCAA Football 10 Translator</h1>
+  <p><strong>Experimental developer tool.</strong> The tested NCAA US disc is currently rejected with an unsupported encryption tag. This tool exports build inputs, not a playable browser engine. To play, use a prepared NCAA web package and its ISO picker.</p>
+  <p class="sub">Turns your NCAA Football 10 PSP (ULUS10440) ISO into the decrypted executable and the generated C++ the build compiles, entirely in this browser. Nothing is uploaded.</p>
+
+  <section aria-labelledby="step-iso">
+    <h2 id="step-iso">Choose your ISO</h2>
+    <p>The page checks the title, decrypts <code>EBOOT.BIN</code>, requires the exact verified executable, then runs the PSPRecomp code generator (compiled to WebAssembly) and extracts the EA audio programs, the same steps as <code>scripts/generate.sh</code>.</p>
+    <label for="iso">Uncompressed ISO</label>
+    <input id="iso" type="file" accept=".iso" aria-describedby="status">
+    <p id="status" role="status">Choose an ISO to begin.</p>
+    <p id="result" hidden></p>
+    <a id="download" class="button" hidden download="ncaa10-translation.zip">Download translation (ZIP)</a>
+    <pre id="details" hidden></pre>
+  </section>
+
+  <section aria-labelledby="step-build">
+    <h2 id="step-build">Use the result</h2>
+    <ol>
+      <li>Unzip into a source checkout's root. It adds <code>games/ncaa10/root/EBOOT.BIN</code>, <code>profile/generated/ncaa10/</code> and <code>profile/generated/ncaa10_sound/</code>, so no separate decrypter or native code generator is needed.</li>
+      <li>Build as usual. On Windows, <code>./scripts/build_ncaa_web.ps1 -Iso 'NCAA.iso'</code> without <code>-Generate</code> reuses the generated C++. On Linux, <code>scripts/port.sh ncaa10 NCAA.iso</code> skips decryption because <code>EBOOT.BIN</code> is present, and regenerates the same C++ natively. Then run <code>python scripts/prepare_static_ncaa.py</code>.</li>
+      <li>Import that package in the <a href="../">launcher</a>.</li>
+    </ol>
+    <p>Compiling the C++ to WebAssembly in the browser is the next phase and is not available yet.</p>
+  </section>
+  <p class="sub">The ZIP contains game-derived code from your disc; keep it private. <a href="../../docs/STATIC_HOSTING.html#translator">How this works</a>.</p>
+</main>
+<script>
+(function () {
+  'use strict';
+  const input = document.getElementById('iso'), status = document.getElementById('status');
+  const result = document.getElementById('result'), download = document.getElementById('download'), details = document.getElementById('details');
+  let worker = null, url = null;
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    if (!file || worker) return;
+    input.disabled = true;
+    status.className = '';
+    result.hidden = download.hidden = details.hidden = true;
+    if (url) { URL.revokeObjectURL(url); url = null; }
+    worker = new Worker('translate-worker.js');
+    worker.onmessage = event => {
+      const message = event.data;
+      if (message.type === 'progress') { status.textContent = file.name + ' · ' + message.text; return; }
+      worker.terminate();
+      worker = null;
+      input.disabled = false;
+      input.value = '';
+      if (message.type === 'error') {
+        status.textContent = message.text;
+        status.className = 'error';
+        return;
+      }
+      const p = message.provenance;
+      status.textContent = 'Done in ' + Math.round(message.seconds) + ' s.';
+      result.textContent = p.discId + ' · executable ' + p.executableSha256.slice(0, 12) + ' verified · ' + p.executableUnits +
+        ' generated files · ' + p.audioPrograms + ' audio programs from ' + p.audioBankEntries + ' bank entries · ZIP ' +
+        (message.blob.size / 1048576).toFixed(1) + ' MiB';
+      result.hidden = false;
+      url = URL.createObjectURL(message.blob);
+      download.href = url;
+      download.hidden = false;
+      details.textContent = JSON.stringify(p, null, 2);
+      details.hidden = false;
+    };
+    worker.onerror = event => {
+      status.textContent = 'The translator stopped: ' + (event.message || 'unknown error');
+      status.className = 'error';
+      worker.terminate();
+      worker = null;
+      input.disabled = false;
+      input.value = '';
+    };
+    worker.postMessage({ file });
+  });
+})();
+</script>
+</body>
+</html>

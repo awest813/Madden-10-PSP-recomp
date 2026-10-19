@@ -1,0 +1,1140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="data:,">
+<title>PSP Web Recomp</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --text: #1b1b1f; --muted: #66666f;
+    --border: #dcdcd8; --accent: #2f6fde; --ok: #1f8a4c; --err: #c23b3b;
+    --ctl: rgba(0, 0, 0, 0.07); --ctl-on: rgba(47, 111, 222, 0.35); --ctl-text: #1b1b1f; --ctl-line: rgba(0, 0, 0, 0.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214; --panel: #1b1b1f; --text: #ececf0; --muted: #9a9aa6;
+      --border: #2c2c33; --accent: #6c9cff; --ok: #4cc27f; --err: #ff6b6b;
+      --ctl: rgba(255, 255, 255, 0.08); --ctl-on: rgba(108, 156, 255, 0.4); --ctl-text: #ececf0; --ctl-line: rgba(255, 255, 255, 0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .disc-loader {
+    padding: 16px 18px; margin: 0 0 16px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel); transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  }
+  .disc-loader.drag-over { border-color: var(--accent); border-style: dashed; box-shadow: 0 0 0 3px var(--ctl-on); }
+  .disc-loader.is-checking { border-color: var(--accent); }
+  .disc-loader.is-ready { border-color: var(--ok); }
+  .disc-loader.is-error { border-color: var(--err); }
+  html.engine-ready .disc-loader { padding: 10px 14px; }
+  html.engine-ready .disc-loader p:not(#disc-message) { display: none; }
+  .disc-loader label { display: block; font-weight: 600; margin-bottom: 8px; }
+  .disc-loader input { max-width: 100%; font: inherit; color: var(--text); }
+  .disc-loader input::file-selector-button {
+    font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+    border: 1px solid var(--accent); border-radius: 6px; padding: 6px 12px; margin-right: 10px; cursor: pointer;
+  }
+  .disc-loader input:disabled::file-selector-button { opacity: 0.55; cursor: not-allowed; }
+  .disc-loader p { margin: 8px 0 0; color: var(--muted); }
+  .disc-loader .disc-error { color: var(--err); font-weight: 500; }
+  html.iso-launcher:not(.engine-ready) .screen,
+  html.iso-launcher:not(.engine-ready) .controls,
+  html.iso-launcher:not(.engine-ready) .actions,
+  html.iso-launcher:not(.engine-ready) .keys,
+  html.iso-launcher:not(.engine-ready) #log { display: none !important; }
+  .screen {
+    background: #000; border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--border); aspect-ratio: 480 / 272; width: 100%;
+  }
+  canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  .bar { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+  .status { font-weight: 600; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  .meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .actions { margin-left: auto; display: flex; gap: 8px; }
+  .bar button, .bar select {
+    font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+  }
+  .keys { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; margin: 0; height: 260px; overflow: auto;
+    font: 12px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap;
+  }
+
+  /* On-screen controls, shown on touch devices only. */
+  .controls { display: none; }
+  body.touch { overscroll-behavior: none; }
+  body.touch main { padding: 12px 12px 24px; }
+  body.touch .keys { display: none; }
+  body.touch pre { height: 140px; }
+  body.touch .controls {
+    display: grid; grid-template-columns: 1fr 1fr; grid-template-areas: "mid mid" "left right";
+    gap: 12px 8px; align-items: end;
+    margin: 4px 0 16px; touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  }
+  .cluster { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .cluster.left { grid-area: left; } .cluster.right { grid-area: right; }
+  .cluster.mid { grid-area: mid; flex-direction: row; gap: 10px; justify-self: center; }
+  .ctl {
+    display: flex; align-items: center; justify-content: center; color: var(--ctl-text);
+    background: var(--ctl); border: 1px solid var(--ctl-line); font-weight: 600;
+  }
+  .ctl.on, .dpad span.on { background: var(--ctl-on); }
+  .shoulder { width: 100%; max-width: 150px; height: 40px; border-radius: 12px 12px 6px 6px; }
+  .small { padding: 0 12px; height: 30px; border-radius: 15px; font-size: 12px; font-weight: 500; }
+  .face { display: grid; grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 50px); }
+  .face .ctl { border-radius: 50%; font-size: 20px; }
+  .face .tri { grid-area: 1 / 2; } .face .sq { grid-area: 2 / 1; }
+  .face .ci { grid-area: 2 / 3; } .face .cr { grid-area: 3 / 2; }
+  .dpad {
+    position: relative; width: 120px; height: 120px; display: grid;
+    grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(3, 40px);
+  }
+  .dpad span {
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+    color: var(--ctl-text); background: var(--ctl); border: 1px solid var(--ctl-line);
+  }
+  .dpad .up { grid-area: 1 / 2; border-radius: 8px 8px 0 0; } .dpad .down { grid-area: 3 / 2; border-radius: 0 0 8px 8px; }
+  .dpad .left { grid-area: 2 / 1; border-radius: 8px 0 0 8px; } .dpad .right { grid-area: 2 / 3; border-radius: 0 8px 8px 0; }
+  .dpad .hub { grid-area: 2 / 2; border-radius: 0; }
+  .stick {
+    position: relative; width: 130px; height: 130px; border-radius: 50%;
+    background: var(--ctl); border: 1px solid var(--ctl-line);
+  }
+  .knob {
+    position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px;
+    border-radius: 50%; background: var(--ctl-on); border: 1px solid var(--ctl-line);
+  }
+
+  body.touch.no-controls .controls { display: none; }
+
+  /* Immersive mode (fullscreen, or a phone held sideways): the picture fills
+     the viewport and the page around it goes away. */
+  body.immersive { background: #000; color: #fff; }
+  body.immersive main {
+    max-width: none; padding: 0; min-height: 100vh; min-height: 100dvh;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  body.immersive h1, body.immersive .sub, body.immersive .disc-loader, body.immersive .keys, body.immersive pre { display: none; }
+  body.immersive .screen {
+    border: 0; border-radius: 0; margin: 0 auto;
+    width: min(100vw, calc(100vh * 480 / 272)); width: min(100vw, calc(100dvh * 480 / 272));
+  }
+  body.immersive .bar {
+    position: fixed; top: 4px; left: 50%; transform: translateX(-50%); margin: 0; z-index: 2;
+    font-size: 12px; gap: 8px; flex-wrap: nowrap; white-space: nowrap; opacity: 0.8; text-shadow: 0 1px 2px #000;
+  }
+  body.immersive .status { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+  body.immersive .bar .meta { color: #ddd; }
+  body.immersive .actions { margin-left: 0; }
+  body.immersive .bar button, body.immersive .bar select {
+    color: #fff; background: rgba(255, 255, 255, 0.15); border-color: rgba(255, 255, 255, 0.25);
+  }
+  body.immersive .bar select option { color: #000; }
+  body.immersive .ctl, body.immersive .dpad span, body.immersive .stick {
+    --ctl: rgba(255, 255, 255, 0.14); --ctl-on: rgba(255, 255, 255, 0.45); --ctl-line: rgba(255, 255, 255, 0.3); --ctl-text: #fff;
+  }
+  @media (orientation: portrait) {
+    body.immersive main { justify-content: flex-start; padding-top: 44px; }
+    body.immersive.touch .controls { margin: 20px 12px; }
+  }
+  /* Sideways, the controls float over the edges of the picture. */
+  @media (orientation: landscape) {
+    body.immersive.touch .controls { position: fixed; inset: 0; margin: 0; display: block; pointer-events: none; z-index: 1; }
+    body.immersive.touch.no-controls .controls { display: none; }
+    body.immersive .cluster { position: absolute; top: 8px; bottom: 8px; justify-content: space-between; pointer-events: auto; opacity: 0.6; }
+    body.immersive .cluster.left { left: calc(8px + env(safe-area-inset-left)); }
+    body.immersive .cluster.right { right: calc(8px + env(safe-area-inset-right)); }
+    body.immersive .cluster.mid { top: auto; bottom: 8px; left: 50%; transform: translateX(-50%); }
+    body.immersive .shoulder { width: 120px; }
+    body.immersive .dpad { width: 105px; height: 105px; grid-template-columns: repeat(3, 35px); grid-template-rows: repeat(3, 35px); }
+    body.immersive .stick { width: 115px; height: 115px; }
+  }
+  .saves { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.55); padding: 12px; }
+  .saves[hidden] { display: none; }
+  .saves-panel {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px; width: min(520px, 100%);
+    max-height: 100%; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  }
+  .saves-title { font-weight: 600; padding: 14px 16px 8px; }
+  .saves-list { list-style: none; margin: 0; padding: 0 8px; overflow-y: auto; flex: 1; }
+  .slot { display: flex; gap: 12px; align-items: center; padding: 8px; border-radius: 8px; cursor: pointer; border: 2px solid transparent; }
+  .slot.sel { border-color: var(--accent); background: var(--ctl); }
+  .slot-icon { width: 96px; height: 54px; flex: none; border-radius: 4px; background: var(--ctl); object-fit: cover; }
+  .slot-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+  .slot-text span { color: var(--muted); font-size: 13px; white-space: pre-line; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .slot-text small { color: var(--muted); font-size: 12px; }
+  .saves-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px 6px; }
+  .saves-actions button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; }
+  .saves-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .saves-hint { color: var(--muted); font-size: 12px; padding: 0 16px 12px; text-align: right; }
+  .osk-fields { padding: 8px 16px; display: grid; gap: 12px; }
+  .osk-fields label { display: grid; gap: 6px; }
+  .osk-fields input { font: inherit; padding: 10px; color: var(--text); background: var(--ctl); border: 1px solid var(--border); border-radius: 6px; min-width: 0; }
+  body.immersive #export-saves, body.immersive #import-saves, body.immersive #note { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PSP Web Recomp</h1>
+  <p class="sub">PSP games recompiled for the browser, with graphics, audio, controls and local saves.</p>
+  <section id="disc-loader" class="disc-loader" hidden aria-label="Load your game">
+    <label for="disc-file">Load NCAA Football 10</label>
+    <input id="disc-file" type="file" accept=".iso" aria-describedby="disc-message">
+    <p id="disc-message" role="status"></p>
+  </section>
+  <div class="screen"><canvas id="canvas" width="480" height="272" oncontextmenu="event.preventDefault()"></canvas></div>
+  <div class="bar">
+    <span id="status" class="status" role="status">Loading…</span>
+    <button id="startup-retry" type="button" hidden onclick="location.reload()">Retry startup</button>
+    <span id="fps" class="meta"></span>
+    <span id="profile" class="meta" hidden></span>
+    <span id="note" class="meta"></span>
+    <span id="save-status" class="meta" role="status"></span>
+    <span class="actions">
+      <select id="scale" aria-label="Resolution" title="Internal resolution">
+        <option value="1">480×272</option>
+        <option value="2">960×544</option>
+        <option value="3">1440×816</option>
+        <option value="4">1920×1088</option>
+      </select>
+      <button id="export-saves" type="button" title="Download your saves as a ZIP file">Export saves</button>
+      <button id="import-saves" type="button" title="Add saves from a ZIP file">Import saves</button>
+      <input id="import-file" type="file" accept=".zip,application/zip" hidden>
+      <button id="sound" type="button">Mute</button>
+      <button id="controls-toggle" type="button" hidden>Hide controls</button>
+      <button id="fullscreen" type="button">Fullscreen</button>
+    </span>
+  </div>
+  <div id="saves" class="saves" hidden role="dialog" aria-modal="true" aria-labelledby="saves-title">
+    <div class="saves-panel">
+      <div id="saves-title" class="saves-title"></div>
+      <ul id="saves-list" class="saves-list"></ul>
+      <div class="saves-actions">
+        <button id="saves-cancel" type="button">Cancel</button>
+        <button id="saves-ok" type="button" class="primary"></button>
+      </div>
+      <div class="saves-hint">Arrows to choose, Enter or ✕ to confirm, Esc or ○ to cancel</div>
+    </div>
+  </div>
+  <div id="osk" class="saves" hidden role="dialog" aria-modal="true" aria-labelledby="osk-title">
+    <form id="osk-form" class="saves-panel">
+      <div id="osk-title" class="saves-title">Enter text</div>
+      <div id="osk-fields" class="osk-fields"></div>
+      <div class="saves-actions">
+        <button id="osk-cancel" type="button">Cancel</button>
+        <button type="submit" class="primary">Continue</button>
+      </div>
+      <div class="saves-hint">Enter to continue · Esc to cancel</div>
+    </form>
+  </div>
+  <div id="touch" class="controls" aria-hidden="true">
+    <div class="cluster left">
+      <div class="ctl shoulder" data-btn="256">L</div>
+      <div class="dpad" data-dpad>
+        <span class="up" data-dir="16">▲</span><span class="left" data-dir="128">◀</span><span class="hub"></span>
+        <span class="right" data-dir="32">▶</span><span class="down" data-dir="64">▼</span>
+      </div>
+      <div class="stick" data-stick><div class="knob" id="knob"></div></div>
+    </div>
+    <div class="cluster mid">
+      <div class="ctl small" data-btn="1">Select</div>
+      <div class="ctl small" data-btn="8">Start</div>
+    </div>
+    <div class="cluster right">
+      <div class="ctl shoulder" data-btn="512">R</div>
+      <div class="face">
+        <div class="ctl tri" data-btn="4096">△</div>
+        <div class="ctl sq" data-btn="32768">□</div>
+        <div class="ctl ci" data-btn="8192">○</div>
+        <div class="ctl cr" data-btn="16384">✕</div>
+      </div>
+    </div>
+  </div>
+  <p class="keys">Controls: arrow keys for the D-pad, Z for ✕, X for ○, A for □, S for △, Q and W for L and R, Enter for Start, Shift for Select, and I/J/K/L for the analog stick. Gamepads work too. F toggles fullscreen.</p>
+  <pre id="log"></pre>
+</main>
+<script src="local_iso.js"></script>
+<script>
+  var logEl = document.getElementById('log');
+  var statusEl = document.getElementById('status');
+  // The GE runs on a thread of its own, which needs a cross-origin isolated page.
+  if (!window.crossOriginIsolated && !window.PSPWEB_LOCAL_ISO) {
+    statusEl.textContent = 'This page has to be served with the Cross-Origin-Opener-Policy and ' +
+      'Cross-Origin-Embedder-Policy headers (scripts/serve.py does this).';
+    statusEl.className = 'status err';
+  }
+  var fpsEl = document.getElementById('fps');
+  function appendLog(text) {
+    logEl.textContent += text + '\n';
+    if (logEl.textContent.length > 200000) logEl.textContent = logEl.textContent.slice(-150000);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  var frames = 0, cpuTotal = 0, stepTotal = 0, lastFps = performance.now(), image = null;
+  var SAVE_ROOT = '/game/ms0/PSP/SAVEDATA';
+  var saveStatusEl = document.getElementById('save-status'), savesLoaded = false, saveRestoreDone = false;
+  function mountSaves() {
+    var dependency = false, finished = false;
+    function finish(error) {
+      if (finished) return;
+      finished = true;
+      saveRestoreDone = true;
+      savesLoaded = !error;
+      if (error) {
+        saveStatusEl.textContent = 'Browser saves unavailable. Export saves before closing this page.';
+        console.warn('saves: could not restore browser storage', error);
+      }
+      if (dependency) removeRunDependency('saves');
+    }
+    try {
+      FS.mkdirTree(SAVE_ROOT);
+      FS.mount(IDBFS, {}, SAVE_ROOT);
+      addRunDependency('saves');
+      dependency = true;
+      FS.syncfs(true, finish);
+    } catch (e) {
+      finish(e);
+    }
+  }
+  // Which GPU the browser draws with (software renderers make high resolutions slow).
+  (function () {
+    try {
+      var gl = document.createElement('canvas').getContext('webgl2');
+      var info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+      var name = gl ? (info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : 'no WebGL2';
+      appendLog('[page] WebGL renderer: ' + name);
+      fpsEl.title = 'Renderer: ' + name;
+    } catch (e) {}
+  })();
+  var Module = {
+    pspReady: false,
+    onRuntimeInitialized: function () {
+      Module.pspReady = true;
+      document.documentElement.classList.add('engine-ready');
+    },
+    onAbort: function () {
+      Module.pspReady = false;
+      statusEl.textContent = 'Game engine could not start. Reload this page to retry.';
+      statusEl.className = 'status err';
+      document.getElementById('startup-retry').hidden = false;
+    },
+    canvas: document.getElementById('canvas'),
+    // ?profile: per-frame timing breakdown in the log (see README).
+    preRun: [mountSaves, function () {
+      if (window.PSPWEB_LOCAL_ISO) PspLocalIso.install({
+        Module: Module, FS: FS, addRunDependency: addRunDependency,
+        removeRunDependency: removeRunDependency, document: document, config: window.PSPWEB_LOCAL_ISO
+      });
+      // Override the title's RAM default (NCAA: 64 MiB; ?ram=32 for comparison).
+      var ram = new URLSearchParams(location.search).get('ram');
+      if (ram !== null) ENV.PSPWEB_RAM_MB = ram;
+      if (/[?&]profile\b/.test(location.search)) ENV.PSPWEB_FRAME_PROFILE = '1';
+      if (/[?&]getimer\b/.test(location.search)) ENV.PSPWEB_GE_TIMER = '1';
+      if (/[?&]trace\b/.test(location.search)) ENV.PSPWEB_TRACE_HLE = '1';
+      if (/[?&]disctrace\b/.test(location.search)) {
+        ENV.PSPWEB_TRACE_NCAA_IO = '1';
+        ENV.PSPWEB_TRACE_IO = '1';
+      }
+      if (/[?&]nochain\b/.test(location.search)) ENV.PSPRECOMP_NO_CHAIN = '1';
+    }],
+    print: function (text) { console.log(text); appendLog(text); },
+    printErr: function (text) { console.warn(text); appendLog(text); },
+    setStatus: function (text) { if (text) statusEl.textContent = text; },
+    pspStatus: function (text) {
+      var running = text === 'running';
+      statusEl.textContent = running ? 'Running' : 'Stopped: ' + text;
+      statusEl.className = 'status ' + (running || text === 'exit' ? 'ok' : 'err');
+    },
+    pspPresent: function (pixels, width, height) {
+      var ctx = Module.canvas.getContext('2d');
+      if (!image) image = ctx.createImageData(width, height);
+      image.data.set(pixels);
+      ctx.putImageData(image, 0, 0);
+    },
+    // FPS, and how long the game itself kept the CPU busy per frame: when that
+    // stays well under 16 ms but the frame rate drops, the GPU or the
+    // browser's compositor is the bottleneck.
+    pspProfile: function (text, spike) {
+      var el = document.getElementById('profile');
+      el.hidden = false;
+      if (sound.stats) text += ' | audio ' + Math.round(sound.stats.queued / 44.1) + ' ms queued, ' + sound.stats.under + ' underruns' +
+        ', ' + sound.stats.over + ' overruns (' + Math.round(sound.stats.dropped / 44.1) + ' ms dropped)' +
+        (sound.stats.inputHz == null ? '' : ', input ' + (sound.stats.inputHz / 1000).toFixed(1) + ' kHz, render ' +
+          (sound.stats.renderHz / 1000).toFixed(1) + '/' + (sound.context.sampleRate / 1000).toFixed(1) + ' kHz');
+      el.textContent = text;
+      if (spike) appendLog('[timing] ' + fpsEl.textContent + ' | ' + text);
+    },
+    pspFrame: function (cpuMs, steps, gameFrames) {
+      frames += gameFrames;
+      cpuTotal += cpuMs || 0;
+      stepTotal += steps;
+      var now = performance.now();
+      if (now - lastFps >= 1000) {
+        // Count guest display commits, rather than browser callbacks. NCAA's
+        // native cadence is one game frame per two 59.94 Hz PSP Vblanks.
+        var elapsed = now - lastFps;
+        fpsEl.textContent = (frames * 1000 / elapsed).toFixed(1) + ' FPS' +
+          ' · ' + Math.round(stepTotal * 1000 / elapsed / (60000 / 1001) * 100) + '% speed' +
+          (cpuTotal > 0 ? ' · CPU ' + (cpuTotal / stepTotal).toFixed(1) + ' ms' : '');
+        frames = 0; cpuTotal = 0; stepTotal = 0; lastFps = now;
+      }
+    }
+  };
+  document.addEventListener('visibilitychange', function () {
+    frames = 0; cpuTotal = 0; stepTotal = 0; lastFps = performance.now();
+    if (Module.pspReady && Module._pspweb_reset_frame_pacer) Module._pspweb_reset_frame_pacer();
+  });
+  // Keyboard and gamepad -> PSP pad (SceCtrlData button bits).
+  var KEYS = { ArrowUp: 0x10, ArrowRight: 0x20, ArrowDown: 0x40, ArrowLeft: 0x80, KeyZ: 0x4000, KeyX: 0x2000,
+               KeyA: 0x8000, KeyS: 0x1000, KeyQ: 0x100, KeyW: 0x200, Enter: 0x8, ShiftLeft: 0x1, ShiftRight: 0x1 };
+  var STICK = { KeyJ: [-1, 0], KeyL: [1, 0], KeyI: [0, -1], KeyK: [0, 1] };
+  var held = {}, inputFocused = true;
+  var saveUi = { info: null, index: 0, confirming: false, urls: [] };
+  function onKey(e, down) {
+    if (oskUi) {
+      if (down && (e.code === 'Enter' || e.code === 'Escape')) {
+        e.preventDefault(); finishOsk(e.code === 'Escape');
+      }
+      return;
+    }
+    if (saveUi.info) {
+      if (down && saveKey(e.code)) e.preventDefault();
+      return;
+    }
+    // Leave native picker/button/select keyboard behavior intact. A key
+    // released after focus moves into a control must still be released in game.
+    if (!Module.pspReady || (e.target && e.target.closest &&
+        e.target.closest('input,textarea,select,button,a,[contenteditable]'))) {
+      if (!down) delete held[e.code];
+      return;
+    }
+    if (!(e.code in KEYS) && !(e.code in STICK)) return;
+    held[e.code] = down; e.preventDefault();
+  }
+  window.addEventListener('keydown', function (e) { onKey(e, true); });
+  window.addEventListener('keyup', function (e) { onKey(e, false); });
+  // Losing focus can prevent keyup/touchend from arriving. Never resume with
+  // an old movement or face-button press still held.
+  function releaseInput() {
+    held = {};
+    padQuiet = true;
+    fingers = {};
+    touchPad = { buttons: 0, x: 0, y: 0, stick: false };
+    if (knob) knob.style.transform = '';
+    if (Module.pspReady && Module._pspweb_set_pad) Module._pspweb_set_pad(0, 128, 128);
+  }
+  window.addEventListener('blur', function () {
+    inputFocused = false;
+    releaseInput();
+  });
+  window.addEventListener('focus', function () { inputFocused = true; });
+
+  // Touch controls. Each finger is tied to the stick or the D-pad if it lands
+  // there; any other finger presses whatever button it is over, so sliding
+  // from one button to the next works.
+  var touchRoot = document.getElementById('touch'), knob = document.getElementById('knob');
+  var touchPad = { buttons: 0, x: 0, y: 0, stick: false };
+  var fingers = {};
+  if (matchMedia('(pointer: coarse)').matches || /[?&]touch\b/.test(location.search)) document.body.classList.add('touch');
+  function circleOf(el) {
+    var r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: r.width / 2 };
+  }
+  function onTouch(e) {
+    e.preventDefault();
+    var seen = {}, buttons = 0, sx = 0, sy = 0, stick = false;
+    for (var i = 0; i < e.touches.length; i++) {
+      var t = e.touches[i];
+      seen[t.identifier] = true;
+      var f = fingers[t.identifier];
+      if (!f) {
+        var start = document.elementFromPoint(t.clientX, t.clientY);
+        var region = start && start.closest('[data-stick],[data-dpad]');
+        f = fingers[t.identifier] = region ? { kind: region.hasAttribute('data-stick') ? 'stick' : 'dpad', el: region } : { kind: 'button' };
+      }
+      if (f.kind === 'stick') {
+        var c = circleOf(f.el), dx = (t.clientX - c.x) / c.r, dy = (t.clientY - c.y) / c.r, len = Math.hypot(dx, dy);
+        if (len > 1) { dx /= len; dy /= len; }
+        sx = dx; sy = dy; stick = true;
+        knob.style.transform = 'translate(' + (dx * c.r * 0.6) + 'px,' + (dy * c.r * 0.6) + 'px)';
+      } else if (f.kind === 'dpad') {
+        var d = circleOf(f.el), ox = t.clientX - d.x, oy = t.clientY - d.y;
+        if (Math.hypot(ox, oy) > d.r * 0.2) {
+          var angle = Math.atan2(oy, ox) * 180 / Math.PI; // 0 = right, 90 = down
+          if (angle > -67.5 && angle < 67.5) buttons |= 0x20;
+          if (angle > 22.5 && angle < 157.5) buttons |= 0x40;
+          if (angle > 112.5 || angle < -112.5) buttons |= 0x80;
+          if (angle > -157.5 && angle < -22.5) buttons |= 0x10;
+        }
+      } else {
+        var over = document.elementFromPoint(t.clientX, t.clientY);
+        var button = over && over.closest('[data-btn]');
+        if (button && touchRoot.contains(button)) buttons |= Number(button.dataset.btn);
+      }
+    }
+    for (var id in fingers) if (!seen[id]) delete fingers[id];
+    if (!stick) knob.style.transform = '';
+    touchPad = { buttons: buttons, x: sx, y: sy, stick: stick };
+    touchRoot.querySelectorAll('[data-btn]').forEach(function (el) {
+      el.classList.toggle('on', (buttons & Number(el.dataset.btn)) !== 0);
+    });
+    touchRoot.querySelectorAll('[data-dir]').forEach(function (el) {
+      el.classList.toggle('on', (buttons & Number(el.dataset.dir)) !== 0);
+    });
+  }
+  ['touchstart', 'touchmove', 'touchend', 'touchcancel'].forEach(function (type) {
+    touchRoot.addEventListener(type, onTouch, { passive: false });
+  });
+
+  // Layout: hiding the on-screen controls, and fullscreen. Browsers without
+  // the Fullscreen API (iPhone Safari) get the same layout inside the page.
+  var body = document.body, root = document.documentElement;
+  var controlsButton = document.getElementById('controls-toggle');
+  var fullscreenButton = document.getElementById('fullscreen');
+  var landscape = matchMedia('(orientation: landscape)');
+  var requestFullscreen = root.requestFullscreen || root.webkitRequestFullscreen;
+  var exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+  var prefs = {}, fullscreen = false;
+  try { prefs = JSON.parse(localStorage.getItem('pspweb-ui') || '{}') || {}; } catch (e) {}
+  function savePrefs() { try { localStorage.setItem('pspweb-ui', JSON.stringify(prefs)); } catch (e) {} }
+  function nativeFullscreen() { return document.fullscreenElement || document.webkitFullscreenElement; }
+  function updateLayout() {
+    var touch = body.classList.contains('touch');
+    body.classList.toggle('no-controls', !!prefs.hideControls);
+    body.classList.toggle('immersive', fullscreen || (touch && landscape.matches));
+    controlsButton.hidden = !touch;
+    controlsButton.textContent = prefs.hideControls ? 'Show controls' : 'Hide controls';
+    fullscreenButton.textContent = fullscreen ? 'Exit fullscreen' : 'Fullscreen';
+  }
+  function toggleFullscreen() {
+    if (fullscreen) {
+      fullscreen = false;
+      if (nativeFullscreen() && exitFullscreen) exitFullscreen.call(document);
+    } else {
+      fullscreen = true;
+      var result = requestFullscreen ? requestFullscreen.call(root, { navigationUI: 'hide' }) : null;
+      if (result && result.then) result.then(function () {
+        if (body.classList.contains('touch') && screen.orientation && screen.orientation.lock)
+          screen.orientation.lock('landscape').catch(function () {});
+      }).catch(function () {});
+    }
+    updateLayout();
+  }
+  function onFullscreenChange() {
+    if (!nativeFullscreen() && fullscreen && requestFullscreen) { fullscreen = false; updateLayout(); }
+  }
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+  if (landscape.addEventListener) landscape.addEventListener('change', updateLayout);
+  else if (landscape.addListener) landscape.addListener(updateLayout);
+  controlsButton.addEventListener('click', function () {
+    prefs.hideControls = !prefs.hideControls;
+    savePrefs();
+    updateLayout();
+  });
+  fullscreenButton.addEventListener('click', toggleFullscreen);
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'KeyF' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) toggleFullscreen();
+  });
+  updateLayout();
+
+  // Internal resolution, applied once the game is running and on every change.
+  var scaleSelect = document.getElementById('scale');
+  // Phones start at native resolution (their GPUs pay much more per pixel);
+  // computers at 3x.  An explicit choice is remembered either way.
+  var wantedScale = Number(prefs.scale) || (body.classList.contains('touch') ? 1 : 3), appliedScale = 0;
+  scaleSelect.value = String(wantedScale);
+  scaleSelect.addEventListener('change', function () {
+    wantedScale = Number(scaleSelect.value);
+    prefs.scale = wantedScale;
+    savePrefs();
+  });
+  function applyScale() {
+    if (appliedScale === wantedScale || !Module._pspweb_set_render_scale) return;
+    var used = Module._pspweb_set_render_scale(wantedScale);
+    if (used === 0) return; // renderer not started yet: try again next frame
+    appliedScale = wantedScale;
+    if (used !== wantedScale) { wantedScale = appliedScale = used; scaleSelect.value = String(used); }
+    // Smooth filtering when the picture is shrunk to fit; crisp pixels at native size.
+    Module.canvas.style.imageRendering = used > 1 ? 'auto' : 'pixelated';
+  }
+
+  // Audio: the game hands over 44.1 kHz stereo once per frame; an AudioWorklet
+  // plays it from a small queue.  Browsers only start audio after a user
+  // gesture, so the first tap, click or key press turns it on.
+  var WORKLET = [
+    'class PspOutput extends AudioWorkletProcessor {',
+    '  constructor(options) {',
+    '    super();',
+    '    this.queue = []; this.pos = 0; this.frames = 0; this.primed = false;',
+    '    this.base = 44100 / options.processorOptions.rate; this.drift = 0; this.target = 4410; this.under = 0; this.blocks = 0;',
+    '    this.received = 0; this.output = 0; this.over = 0; this.dropped = 0;',
+    '    this.port.onmessage = (e) => {',
+    '      if (e.data.reset) { this.queue = []; this.pos = 0; this.frames = 0; this.primed = false; this.drift = 0; this.received = 0; this.output = 0; return; }',
+    '      this.queue.push(e.data); this.frames += e.data.length / 2; this.received += e.data.length / 2;',
+    '      const before = this.frames;',
+    '      while (this.frames > 44100 * 0.25 && this.queue.length > 1) {',
+    '        this.frames -= this.queue[0].length / 2 - Math.floor(this.pos); this.queue.shift(); this.pos = 0;',
+    '      }',
+    '      if (this.frames > 11025) { this.pos = this.queue[0].length / 2 - 11025; this.frames = 11025; }',
+    '      if (this.frames < before) { ++this.over; this.dropped += before - this.frames; }',
+    '    };',
+    '  }',
+    '  process(inputs, outputs) {',
+    '    const left = outputs[0][0], right = outputs[0][1] || outputs[0][0];',
+    '    this.output += left.length;',
+    '    if (++this.blocks % 344 === 0) this.port.postMessage({ queued: this.frames, under: this.under, over: this.over, dropped: this.dropped, received: this.received, output: this.output });',
+    '    if (!this.primed) { if (this.frames < this.target) { left.fill(0); right.fill(0); return true; } this.primed = true; }',
+    '    const error = Math.max(-1, Math.min(1, (this.frames - this.target) / this.target));',
+    '    this.drift = Math.max(-0.008, Math.min(0.008, this.drift + error * 0.00000025));',
+    '    const step = this.base * (1 + Math.max(-0.01, Math.min(0.01, this.drift + error * 0.004)));',
+    '    for (let i = 0; i < left.length; i++) {',
+    '      const chunk = this.queue[0];',
+    '      if (!chunk) { left[i] = right[i] = 0; if (this.primed) this.under++; this.primed = false; this.pos = 0; this.frames = 0; continue; }',
+    '      const whole = Math.floor(this.pos), at = whole * 2, f = this.pos - whole;',
+    '      const next = at + 2 < chunk.length ? chunk : this.queue[1], n = at + 2 < chunk.length ? at + 2 : 0;',
+    '      const l = chunk[at], r = chunk[at + 1];',
+    '      left[i] = next ? l + (next[n] - l) * f : l; right[i] = next ? r + (next[n + 1] - r) * f : r;',
+    '      this.pos += step;',
+    '      this.frames -= Math.floor(this.pos) - whole;',
+    '      while (this.queue.length && this.pos * 2 >= this.queue[0].length) { this.pos -= this.queue[0].length / 2; this.queue.shift(); }',
+    '      this.frames = Math.max(0, this.frames);',
+    '    }',
+    '    return true;',
+    '  }',
+    '}',
+    "registerProcessor('psp-output', PspOutput);"
+  ].join('\n');
+  var sound = { context: null, node: null, gain: null, muted: !!prefs.muted };
+  var soundButton = document.getElementById('sound');
+  function updateSoundButton() { soundButton.textContent = sound.muted ? 'Unmute' : 'Mute'; }
+  updateSoundButton();
+  function startSound() {
+    if (document.hidden) return;
+    if (sound.context) {
+      if (sound.context.state === 'suspended') sound.context.resume();
+      return;
+    }
+    var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass || !window.AudioWorkletNode) return;
+    // Let the device choose its native graph rate; the worklet already resamples
+    // PSP PCM. Forcing 44.1 kHz adds a second resampling stage on 48 kHz devices.
+    try { sound.context = new AudioContextClass({ latencyHint: 'interactive' }); }
+    catch (e) { sound.context = new AudioContextClass(); }
+    var url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+    sound.context.audioWorklet.addModule(url).then(function () {
+      sound.node = new AudioWorkletNode(sound.context, 'psp-output',
+        { outputChannelCount: [2], processorOptions: { rate: sound.context.sampleRate } });
+      sound.node.port.onmessage = function (e) {
+        var previous = sound.stats, now = performance.now();
+        sound.stats = e.data;
+        sound.stats.at = now;
+        if (previous && now > previous.at && e.data.output > previous.output && e.data.received >= previous.received) {
+          // Wall time distinguishes producer overproduction from a render
+          // thread that misses device deadlines. Output frames are not a clock.
+          sound.stats.inputHz = (e.data.received - previous.received) * 1000 / (now - previous.at);
+          sound.stats.renderHz = (e.data.output - previous.output) * 1000 / (now - previous.at);
+        }
+      };
+      sound.gain = sound.context.createGain();
+      sound.gain.gain.value = sound.muted ? 0 : 1;
+      sound.node.connect(sound.gain).connect(sound.context.destination);
+    }).catch(function (e) { console.warn('audio unavailable', e); });
+  }
+  ['pointerup', 'touchend', 'keydown', 'mousedown'].forEach(function (type) {
+    window.addEventListener(type, startSound, { passive: true });
+  });
+  soundButton.addEventListener('click', function () {
+    sound.muted = !sound.muted;
+    prefs.muted = sound.muted;
+    savePrefs();
+    if (sound.gain) sound.gain.gain.value = sound.muted ? 0 : 1;
+    if (sound.node) sound.node.port.postMessage({ reset: true });
+    updateSoundButton();
+  });
+  Module.pspAudio = function (samples) {
+    if (document.hidden || !sound.node || sound.muted || sound.context.state !== 'running') return;
+    var data = new Float32Array(samples.length);
+    for (var i = 0; i < samples.length; i++) data[i] = samples[i] / 32768;
+    sound.node.port.postMessage(data, [data.buffer]);
+  };
+  document.addEventListener('visibilitychange', function () {
+    releaseInput();
+    if (sound.node) sound.node.port.postMessage({ reset: true });
+    if (!sound.context) return;
+    var action = document.hidden ? sound.context.suspend() : sound.context.resume();
+    action.catch(function (e) { console.warn('audio visibility change', e); });
+  });
+
+  var PAD_BUTTONS = [0x4000, 0x2000, 0x8000, 0x1000, 0x100, 0x200, 0, 0, 0x1, 0x8, 0, 0, 0x10, 0x40, 0x80, 0x20];
+  var padPrev = { nav: 0, ok: false, back: false }, padQuiet = false;
+  var oskUi = null;
+  function finishOsk(canceled) {
+    if (!oskUi) return;
+    var active = oskUi;
+    if (!canceled) active.inputs.forEach(function (input, index) {
+      var text = input.value.slice(0, input.maxLength);
+      var ptr = Module._malloc((text.length + 1) * 2);
+      try {
+        for (var i = 0; i < text.length; ++i) HEAPU16[(ptr >> 1) + i] = text.charCodeAt(i);
+        HEAPU16[(ptr >> 1) + text.length] = 0;
+        Module._pspweb_osk_field(index, ptr, text.length);
+      } finally { Module._free(ptr); }
+    });
+    Module._pspweb_osk_complete(canceled ? 1 : 0);
+    oskUi = null;
+    document.getElementById('osk').hidden = true;
+    releaseInput(); padQuiet = true;
+    if (active.focus && active.focus.focus) active.focus.focus();
+  }
+  Module.pspOskDialog = function (info) {
+    releaseInput(); padQuiet = true;
+    padPrev = { nav: 0, ok: true, back: true }; // require release of the button that opened it
+    var fields = document.getElementById('osk-fields'); fields.textContent = '';
+    oskUi = { inputs: [], focus: document.activeElement };
+    for (var i = 0; i < info.length; ++i) {
+      var label = document.createElement('label'), input = document.createElement('input');
+      label.textContent = info[i].label || 'Text';
+      input.type = 'text'; input.maxLength = info[i].limit;
+      input.value = info[i].initial.slice(0, input.maxLength);
+      input.autocomplete = 'off'; input.spellcheck = false;
+      label.appendChild(input); fields.appendChild(label); oskUi.inputs.push(input);
+    }
+    document.getElementById('osk').hidden = false;
+    oskUi.inputs[0].focus(); oskUi.inputs[0].select();
+  };
+  document.getElementById('osk-form').addEventListener('submit', function (e) { e.preventDefault(); finishOsk(false); });
+  document.getElementById('osk-cancel').addEventListener('click', function () { finishOsk(true); });
+  function pollSaveDialog(pads) {
+    var nav = 0, ok = false, back = false;
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i]; if (!p) continue;
+      if ((p.buttons[12] && p.buttons[12].pressed) || p.axes[1] < -0.5) nav = -1;
+      if ((p.buttons[13] && p.buttons[13].pressed) || p.axes[1] > 0.5) nav = 1;
+      ok = ok || (p.buttons[0] && p.buttons[0].pressed);
+      back = back || (p.buttons[1] && p.buttons[1].pressed);
+    }
+    if (nav && nav !== padPrev.nav) moveSave(nav);
+    if (ok && !padPrev.ok) confirmSave();
+    else if (back && !padPrev.back) cancelSave();
+    padPrev = { nav: nav, ok: ok, back: back };
+  }
+  function pollInput() {
+    if (!Module.pspReady) { requestAnimationFrame(pollInput); return; }
+    if (document.hidden || !inputFocused) {
+      if (Module._pspweb_set_pad) Module._pspweb_set_pad(0, 128, 128);
+      requestAnimationFrame(pollInput); return;
+    }
+    var buttons = touchPad.buttons, ax = 0, ay = 0;
+    if (oskUi) {
+      var oskPads = navigator.getGamepads ? navigator.getGamepads() : [], ok = false, back = false;
+      for (var i = 0; i < oskPads.length; ++i) {
+        var p = oskPads[i]; if (!p) continue;
+        ok = ok || !!(p.buttons[0] && p.buttons[0].pressed);
+        back = back || !!(p.buttons[1] && p.buttons[1].pressed);
+      }
+      if (ok && !padPrev.ok) finishOsk(false);
+      else if (back && !padPrev.back) finishOsk(true);
+      padPrev = { nav: 0, ok: ok, back: back };
+      if (Module._pspweb_set_pad) Module._pspweb_set_pad(0, 128, 128);
+      requestAnimationFrame(pollInput); return;
+    }
+    if (saveUi.info) {
+      pollSaveDialog(navigator.getGamepads ? navigator.getGamepads() : []);
+      padQuiet = true;
+      if (Module._pspweb_set_pad) Module._pspweb_set_pad(0, 128, 128);
+      requestAnimationFrame(pollInput);
+      return;
+    }
+    for (var code in held) if (held[code]) {
+      if (code in KEYS) buttons |= KEYS[code];
+      if (code in STICK) { ax += STICK[code][0]; ay += STICK[code][1]; }
+    }
+    if (touchPad.stick) { ax = touchPad.x; ay = touchPad.y; }
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i]; if (!p) continue;
+      p.buttons.forEach(function (b, n) { if (b.pressed && PAD_BUTTONS[n]) buttons |= PAD_BUTTONS[n]; });
+      if (Math.abs(p.axes[0]) > 0.15) ax = p.axes[0];
+      if (Math.abs(p.axes[1]) > 0.15) ay = p.axes[1];
+    }
+    applyScale();
+    if (padQuiet) {
+      // A dialog/focus transition must not carry a held stick into gameplay.
+      // Require a neutral sample before accepting any input again.
+      if (buttons === 0 && ax === 0 && ay === 0) padQuiet = false;
+      buttons = 0; ax = 0; ay = 0;
+    }
+    if (Module._pspweb_set_pad) {
+      var lx = Math.max(0, Math.min(255, Math.round(128 + ax * 127)));
+      var ly = Math.max(0, Math.min(255, Math.round(128 + ay * 127)));
+      Module._pspweb_set_pad(buttons, lx, ly);
+    }
+    requestAnimationFrame(pollInput);
+  }
+  requestAnimationFrame(pollInput);
+
+  var noteEl = document.getElementById('note'), noteTimer = 0;
+  function note(text) {
+    noteEl.textContent = text;
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () { noteEl.textContent = ''; }, 6000);
+  }
+  // Autosaves and imports share one queue: IDBFS sync operations must not overlap.
+  var saveSync = Promise.resolve(), syncTimer = 0;
+  function persistSaves() {
+    var operation = saveSync.then(function () {
+      if (!savesLoaded) throw new Error('browser saves were not restored; export saves before reloading');
+      return new Promise(function (resolve, reject) {
+        FS.syncfs(false, function (error) { if (error) reject(error); else resolve(); });
+      });
+    }).then(function () {
+      saveStatusEl.textContent = '';
+    }, function (error) {
+      saveStatusEl.textContent = 'Saves could not be stored. Export saves before closing this page.';
+      console.warn('saves: could not write browser storage', error);
+      throw error;
+    });
+    // A failed write must not poison the next save attempt.
+    saveSync = operation.catch(function () {});
+    return operation;
+  }
+  function storeSaves() {
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(function () {
+      persistSaves().catch(function () {});
+    }, 300);
+  }
+  Module.pspSavesChanged = storeSaves;
+
+  var savesEl = document.getElementById('saves'), savesList = document.getElementById('saves-list');
+  var savesTitle = document.getElementById('saves-title'), savesOk = document.getElementById('saves-ok');
+  var SAVE_WORDS = { load: ['Load game', 'Load'], save: ['Save game', 'Save'], delete: ['Delete saved data', 'Delete'] };
+  function saveIcon(dir) {
+    try {
+      var url = URL.createObjectURL(new Blob([FS.readFile(SAVE_ROOT + '/' + dir + '/ICON0.PNG')], { type: 'image/png' }));
+      saveUi.urls.push(url);
+      return url;
+    } catch (e) {
+      return null;
+    }
+  }
+  function renderSaves() {
+    var info = saveUi.info;
+    saveUi.urls.forEach(function (url) { URL.revokeObjectURL(url); });
+    saveUi.urls = [];
+    savesList.textContent = '';
+    info.slots.forEach(function (slot, i) {
+      var li = document.createElement('li');
+      li.className = 'slot' + (i === saveUi.index ? ' sel' : '');
+      var icon = slot.exists ? saveIcon(info.game + slot.name) : null;
+      var pic = document.createElement(icon ? 'img' : 'div');
+      pic.className = 'slot-icon';
+      if (icon) { pic.src = icon; pic.alt = ''; }
+      var text = document.createElement('div');
+      text.className = 'slot-text';
+      var head = document.createElement('b');
+      head.textContent = slot.exists ? (slot.subtitle || slot.title || slot.name) : 'New save';
+      var detail = document.createElement('span');
+      detail.textContent = slot.exists ? slot.detail : slot.name;
+      var when = document.createElement('small');
+      when.textContent = slot.exists && slot.time ? new Date(slot.time * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
+      text.append(head, detail, when);
+      li.append(pic, text);
+      li.addEventListener('click', function () {
+        if (saveUi.index === i) { confirmSave(); return; }
+        saveUi.index = i;
+        saveUi.confirming = false;
+        renderSaves();
+      });
+      savesList.appendChild(li);
+    });
+    var words = SAVE_WORDS[info.mode] || SAVE_WORDS.load;
+    savesTitle.textContent = saveUi.confirming ? (info.mode === 'delete' ? 'Delete this save?' : 'Overwrite this save?') : words[0];
+    savesOk.textContent = saveUi.confirming ? (info.mode === 'delete' ? 'Delete' : 'Overwrite') : words[1];
+    var selected = savesList.children[saveUi.index];
+    if (selected) selected.scrollIntoView({ block: 'nearest' });
+  }
+  function closeSaves(choice) {
+    savesEl.hidden = true;
+    saveUi.urls.forEach(function (url) { URL.revokeObjectURL(url); });
+    saveUi = { info: null, index: 0, confirming: false, urls: [] };
+    if (Module._pspweb_save_choice) Module._pspweb_save_choice(choice);
+  }
+  function confirmSave() {
+    var info = saveUi.info, slot = info.slots[saveUi.index];
+    if (!saveUi.confirming && (info.mode === 'delete' || (info.mode === 'save' && slot.exists))) {
+      saveUi.confirming = true;
+      renderSaves();
+      return;
+    }
+    closeSaves(saveUi.index);
+  }
+  function cancelSave() {
+    if (saveUi.confirming) {
+      saveUi.confirming = false;
+      renderSaves();
+      return;
+    }
+    closeSaves(-1);
+  }
+  function moveSave(step) {
+    var n = saveUi.info.slots.length;
+    saveUi.index = (saveUi.index + step + n) % n;
+    saveUi.confirming = false;
+    renderSaves();
+  }
+  function saveKey(code) {
+    if (code === 'ArrowUp' || code === 'KeyI') moveSave(-1);
+    else if (code === 'ArrowDown' || code === 'KeyK') moveSave(1);
+    else if (code === 'Enter' || code === 'KeyZ' || code === 'Space') confirmSave();
+    else if (code === 'Escape' || code === 'KeyX' || code === 'Backspace') cancelSave();
+    else return false;
+    return true;
+  }
+  Module.pspSaveDialog = function (info) {
+    held = {};
+    padPrev = { nav: 0, ok: true, back: true };
+    saveUi = { info: info, index: Math.max(0, Math.min(info.focus, info.slots.length - 1)), confirming: false, urls: [] };
+    renderSaves();
+    savesEl.hidden = false;
+  };
+  savesOk.addEventListener('click', function () { if (saveUi.info) confirmSave(); });
+  document.getElementById('saves-cancel').addEventListener('click', function () { if (saveUi.info) cancelSave(); });
+
+  var CRC_TABLE = (function () {
+    var table = new Uint32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+  function crc32(data) {
+    var c = 0xFFFFFFFF;
+    for (var i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 255] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function saveFiles(dir, prefix, out) {
+    FS.readdir(dir).forEach(function (name) {
+      if (name === '.' || name === '..') return;
+      var path = dir + '/' + name, relative = prefix ? prefix + '/' + name : name;
+      if (FS.isDir(FS.stat(path).mode)) saveFiles(path, relative, out);
+      else out.push({ name: relative, data: FS.readFile(path) });
+    });
+    return out;
+  }
+  function makeZip(files) {
+    var encoder = new TextEncoder(), parts = [], central = [], offset = 0, now = new Date();
+    var time = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+    var date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    files.forEach(function (f) {
+      var name = encoder.encode(f.name), crc = crc32(f.data), local = new DataView(new ArrayBuffer(30)), entry = new DataView(new ArrayBuffer(46));
+      local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x800, true);
+      local.setUint16(10, time, true); local.setUint16(12, date, true); local.setUint32(14, crc, true);
+      local.setUint32(18, f.data.length, true); local.setUint32(22, f.data.length, true); local.setUint16(26, name.length, true);
+      entry.setUint32(0, 0x02014b50, true); entry.setUint16(4, 20, true); entry.setUint16(6, 20, true); entry.setUint16(8, 0x800, true);
+      entry.setUint16(12, time, true); entry.setUint16(14, date, true); entry.setUint32(16, crc, true);
+      entry.setUint32(20, f.data.length, true); entry.setUint32(24, f.data.length, true); entry.setUint16(28, name.length, true);
+      entry.setUint32(42, offset, true);
+      parts.push(local, name, f.data);
+      central.push(entry, name);
+      offset += 30 + name.length + f.data.length;
+    });
+    var size = central.reduce(function (n, part) { return n + part.byteLength; }, 0), end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+    end.setUint32(12, size, true); end.setUint32(16, offset, true);
+    return new Blob(parts.concat(central, [end]), { type: 'application/zip' });
+  }
+  async function readZip(buffer) {
+    var limit = 64 * 1024 * 1024, fileLimit = 16 * 1024 * 1024;
+    if (buffer.byteLength > limit) throw new Error('save ZIP exceeds 64 MiB');
+    var view = new DataView(buffer), bytes = new Uint8Array(buffer), end = -1, files = [], decoder = new TextDecoder('utf-8', { fatal: true });
+    function bounds(at, size, ceiling) {
+      if (at < 0 || size < 0 || at + size > ceiling) throw new Error('the ZIP file is truncated or damaged');
+    }
+    for (var i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--)
+      if (view.getUint32(i, true) === 0x06054b50 && i + 22 + view.getUint16(i + 20, true) === bytes.length) { end = i; break; }
+    if (end < 0) throw new Error('this is not a ZIP file');
+    var count = view.getUint16(end + 10, true), at = view.getUint32(end + 16, true), centralEnd = at + view.getUint32(end + 12, true);
+    if (view.getUint16(end + 4, true) || view.getUint16(end + 6, true) || view.getUint16(end + 8, true) !== count || count > 4096 || centralEnd !== end)
+      throw new Error('split, ZIP64 or oversized save archives are unsupported');
+    bounds(at, centralEnd - at, end);
+    var total = 0, ranges = [];
+    for (var n = 0; n < count; n++) {
+      bounds(at, 46, centralEnd);
+      if (view.getUint32(at, true) !== 0x02014b50) throw new Error('the ZIP file is damaged');
+      var flags = view.getUint16(at + 8, true), method = view.getUint16(at + 10, true), crc = view.getUint32(at + 16, true);
+      var packed = view.getUint32(at + 20, true), size = view.getUint32(at + 24, true), nameLength = view.getUint16(at + 28, true);
+      var entryLength = 46 + nameLength + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
+      bounds(at, entryLength, centralEnd);
+      if (flags & ~0x80E || view.getUint16(at + 34, true)) throw new Error('encrypted or unsupported save ZIP');
+      total += size;
+      if (size > fileLimit || total > limit) throw new Error('expanded save ZIP is too large');
+      var name = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLength)), local = view.getUint32(at + 42, true);
+      bounds(local, 30, view.getUint32(end + 16, true));
+      if (view.getUint32(local, true) !== 0x04034b50 || view.getUint16(local + 6, true) !== flags || view.getUint16(local + 8, true) !== method)
+        throw new Error('save ZIP headers disagree');
+      var localNameLength = view.getUint16(local + 26, true);
+      var start = local + 30 + localNameLength + view.getUint16(local + 28, true);
+      bounds(local, start - local + packed, view.getUint32(end + 16, true));
+      if (decoder.decode(bytes.subarray(local + 30, local + 30 + localNameLength)) !== name ||
+          (!(flags & 8) && (view.getUint32(local + 14, true) !== crc || view.getUint32(local + 18, true) !== packed || view.getUint32(local + 22, true) !== size)))
+        throw new Error('save ZIP headers disagree');
+      ranges.push([local, start + packed]);
+      at += entryLength;
+      var data = bytes.slice(start, start + packed);
+      if (method === 8) {
+        var reader = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader(), chunks = [], expanded = 0;
+        try {
+          for (;;) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            expanded += chunk.value.byteLength;
+            if (expanded > size) throw new Error('save ZIP expanded size disagrees');
+            chunks.push(chunk.value);
+          }
+        } catch (error) { await reader.cancel().catch(function () {}); throw error; }
+        data = new Uint8Array(expanded);
+        var copied = 0;
+        chunks.forEach(function (chunk) { data.set(chunk, copied); copied += chunk.byteLength; });
+      }
+      else if (method !== 0) throw new Error(name + ' uses an unsupported compression method');
+      if (data.length !== size || crc32(data) !== crc) throw new Error(name + ' failed size/CRC verification');
+      files.push({ name: name, data: data });
+    }
+    if (at !== centralEnd) throw new Error('save ZIP directory size disagrees');
+    ranges.sort(function (a, b) { return a[0] - b[0]; });
+    for (var r = 1; r < ranges.length; ++r)
+      if (ranges[r][0] < ranges[r - 1][1]) throw new Error('save ZIP entries overlap');
+    return files;
+  }
+  function saveImportFiles(files) {
+    var targets = new Set(), output = [];
+    files.forEach(function (f) {
+      var name = f.name.replace(/\\/g, '/');
+      var parts = name.replace(/\/$/, '').split('/');
+      if (parts.some(function (part) { return !part || part === '.' || part === '..' || !/^[A-Za-z0-9_.-]+$/.test(part); }))
+        throw new Error('unsafe save ZIP path');
+      var at = parts.map(function (part) { return part.toUpperCase(); }).lastIndexOf('SAVEDATA');
+      if (at >= 0) parts = parts.slice(at + 1);
+      if (parts.length !== 2 || /\/$/.test(name)) return;
+      if (parts[0].length > 63 || parts[1].length > 255) throw new Error('save ZIP name is too long');
+      var target = parts.join('/');
+      if (targets.has(target.toUpperCase())) throw new Error('duplicate save ZIP destination');
+      targets.add(target.toUpperCase());
+      output.push({ name: target, data: f.data });
+    });
+    // Native PSP saves can be encrypted even though the surrounding ZIP is
+    // ordinary. This runtime reads NCAA's plaintext EA database directly.
+    // Reject the recognizable encrypted case before replacing any save files.
+    var imported = new Map(output.map(function (f) { return [f.name.toUpperCase(), f.data]; }));
+    output.forEach(function (f) {
+      if (!/^ULUS1044[01][^/]*\/PARAM\.SFO$/i.test(f.name)) return;
+      var data = imported.get(f.name.replace(/PARAM\.SFO$/i, 'DATA.BIN').toUpperCase());
+      if (!data || (data[0] === 0x44 && data[1] === 0x42)) return;
+      var bytes = f.data;
+      if (bytes.length < 20) return;
+      var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (view.getUint32(0, true) !== 0x46535000) return;
+      var keys = view.getUint32(8, true), values = view.getUint32(12, true), count = view.getUint32(16, true);
+      if (count > 1024 || 20 + count * 16 > keys || keys > values || values > bytes.length) return;
+      for (var i = 0; i < count; ++i) {
+        var at = 20 + i * 16, key = keys + view.getUint16(at, true), end = bytes.indexOf(0, key);
+        var start = values + view.getUint32(at + 12, true), size = view.getUint32(at + 4, true);
+        if (key >= values || end < key || end >= values || !size || start + size > bytes.length) continue;
+        if (new TextDecoder().decode(bytes.subarray(key, end)) === 'SAVEDATA_PARAMS' && bytes[start])
+          throw new Error('Encrypted NCAA save detected. Import a decrypted PSP save copy; this player does not decrypt saves.');
+      }
+    });
+    return output;
+  }
+  function applySaveImport(files) {
+    var before = [], directories = [], saves = new Set();
+    function rollback() {
+      before.slice().reverse().forEach(function (f) {
+        if (f.existed) FS.writeFile(f.path, f.data);
+        else if (FS.analyzePath(f.path).exists) FS.unlink(f.path);
+      });
+      directories.slice().reverse().forEach(function (dir) { FS.rmdir(dir); });
+    }
+    try {
+      files.forEach(function (f) {
+        var path = SAVE_ROOT + '/' + f.name, dir = path.slice(0, path.lastIndexOf('/'));
+        var existed = FS.analyzePath(path).exists;
+        before.push({ path: path, existed: existed, data: existed ? FS.readFile(path) : null });
+        if (!FS.analyzePath(dir).exists) { FS.mkdirTree(dir); directories.push(dir); }
+        FS.writeFile(path, f.data);
+        saves.add(f.name.split('/')[0]);
+      });
+    } catch (error) {
+      rollback();
+      throw error;
+    }
+    return { count: saves.size, rollback: rollback };
+  }
+  document.getElementById('export-saves').addEventListener('click', function () {
+    if (!saveRestoreDone) { note('Wait for browser saves to finish loading'); return; }
+    if (importBusy) { note('Wait for the save import to finish before exporting'); return; }
+    var files = [];
+    try { files = saveFiles(SAVE_ROOT, '', []); }
+    catch (e) { note('Export failed: ' + e.message); return; }
+    if (!files.length) { note('No saves yet'); return; }
+    var link = document.createElement('a');
+    link.href = URL.createObjectURL(makeZip(files));
+    link.download = 'psp-saves-' + new Date().toISOString().slice(0, 10) + '.zip';
+    link.click();
+    setTimeout(function () { URL.revokeObjectURL(link.href); }, 10000);
+  });
+  var importInput = document.getElementById('import-file');
+  var importBusy = false;
+  document.getElementById('import-saves').addEventListener('click', function () { importInput.click(); });
+  importInput.addEventListener('change', async function () {
+    if (importBusy) return;
+    var file = importInput.files[0];
+    importInput.value = '';
+    if (!file) return;
+    importBusy = true;
+    document.getElementById('import-saves').disabled = true;
+    try {
+      if (!Module.pspReady) throw new Error('wait for game startup before importing saves');
+      if (!savesLoaded) throw new Error('browser storage is unavailable; export in-memory saves before reloading');
+      if (file.size > 64 * 1024 * 1024) throw new Error('save ZIP exceeds 64 MiB');
+      var files = saveImportFiles(await readZip(await file.arrayBuffer()));
+      // A preceding autosave must finish before imported files enter its view.
+      await saveSync;
+      var imported = applySaveImport(files);
+      try {
+        if (files.length) await persistSaves();
+      } catch (error) {
+        imported.rollback();
+        throw new Error('browser storage could not save the import; previous files restored. ' + error.message);
+      }
+      note(imported.count ? 'Imported ' + imported.count + (imported.count === 1 ? ' save' : ' saves') + ' (' + files.length + ' files)' : 'No saves found in that file');
+    } catch (e) {
+      note('Import failed: ' + e.message);
+    } finally {
+      importBusy = false;
+      document.getElementById('import-saves').disabled = false;
+    }
+  });
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

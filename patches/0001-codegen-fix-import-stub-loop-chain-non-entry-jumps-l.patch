@@ -1,0 +1,154 @@
+From 6d81e2e3050e0977441d2d6b5c18bd5b7b3901df Mon Sep 17 00:00:00 2001
+From: Samir Nuri <samirnuri714@gmail.com>
+Date: Wed, 7 Oct 2026 13:06:52 +0200
+Subject: [PATCH 1/5] codegen: fix import stub loop, chain non-entry jumps,
+ lower more VFPU ops
+
+* A `jal` to an import stub used `continue` instead of `break`, so code
+  generation for that instruction never finished and memory use grew
+  without bound.
+* Direct jumps to targets that are not unit entries called translation
+  units that were never generated; they now go through the generic
+  chained-call path.
+* The fallback for unsupported VFPU encodings now lowers the vsrt1-4,
+  vbfy1/2, vsocp and vsgn group and the unaligned quad loads and stores
+  (lvl.q, lvr.q, svl.q, svr.q).
+---
+ tools/codegen_main.cpp | 87 +++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 82 insertions(+), 5 deletions(-)
+
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+index ed94229..2db2205 100644
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -16,6 +16,7 @@
+ #include <iostream>
+ #include <iomanip>
+ #include <map>
++#include <optional>
+ #include <regex>
+ #include <string_view>
+ #include <set>
+@@ -773,6 +774,77 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
+     return out.str();
+ }
+ 
++// VFPU encodings the generic decoder leaves as OpcodeKind::Vfpu: the VFPU4
++// group-2 vector ops (vsrt/vbfy/vsocp/vsgn) and unaligned quad load/stores.
++std::optional<std::string> emit_extra_vfpu(const psprecomp::DecodedInstruction &d) {
++    const std::uint32_t w = d.word, major = w >> 26u;
++    std::ostringstream out;
++    if (major == 0x34u && ((w >> 21u) & 31u) == 2u) {
++        const std::uint32_t size_code = ((w >> 7u) & 1u) | (((w >> 15u) & 1u) << 1u);
++        const std::uint32_t length = size_code + 1u;
++        std::uint32_t out_length = length;
++        const std::uint32_t destination = w & 0x7Fu, source = (w >> 8u) & 0x7Fu;
++        std::string op;
++        switch ((w >> 16u) & 31u) {
++        case 0: op = "d[0] = s[0] < s[1] ? s[0] : s[1]; d[1] = s[0] < s[1] ? s[1] : s[0]; "
++                     "d[2] = s[2] < s[3] ? s[2] : s[3]; d[3] = s[2] < s[3] ? s[3] : s[2];"; break; // vsrt1
++        case 1: op = "d[0] = s[0] < s[3] ? s[0] : s[3]; d[1] = s[1] < s[2] ? s[1] : s[2]; "
++                     "d[2] = s[1] < s[2] ? s[2] : s[1]; d[3] = s[0] < s[3] ? s[3] : s[0];"; break; // vsrt2
++        case 2: op = "d[0] = s[0] + s[1]; d[1] = s[0] - s[1]; d[2] = s[2] + s[3]; d[3] = s[2] - s[3];"; break; // vbfy1
++        case 3: op = "d[0] = s[0] + s[2]; d[1] = s[1] + s[3]; d[2] = s[0] - s[2]; d[3] = s[1] - s[3];"; break; // vbfy2
++        case 5: // vsocp: (1 - x, x) per input lane, saturated to [0, 1]
++            op = "for (std::uint32_t i = 0; i < " + std::to_string(length) + "u && i < 2u; ++i) { "
++                 "const float a = 1.0f - s[i], b = s[i]; d[i * 2u] = a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a); "
++                 "d[i * 2u + 1u] = b < 0.0f ? 0.0f : (b > 1.0f ? 1.0f : b); }";
++            out_length = length * 2u > 4u ? 4u : length * 2u;
++            break;
++        case 8: op = "d[0] = s[0] < s[1] ? s[1] : s[0]; d[1] = s[0] < s[1] ? s[0] : s[1]; "
++                     "d[2] = s[2] < s[3] ? s[3] : s[2]; d[3] = s[2] < s[3] ? s[2] : s[3];"; break; // vsrt3
++        case 9: op = "d[0] = s[0] < s[3] ? s[3] : s[0]; d[1] = s[1] < s[2] ? s[2] : s[1]; "
++                     "d[2] = s[1] < s[2] ? s[1] : s[2]; d[3] = s[0] < s[3] ? s[0] : s[3];"; break; // vsrt4
++        case 10: // vsgn
++            op = "for (std::uint32_t i = 0; i < " + std::to_string(length) +
++                 "u; ++i) d[i] = s[i] > 0.0f ? 1.0f : (s[i] < 0.0f ? -1.0f : 0.0f);";
++            break;
++        default: return std::nullopt;
++        }
++        out << "    { float s[4]{}, d[4]{};\n"
++            << "      ctx.read_vfpu_vector_with_source_prefix(s, " << source << "u, " << length << "u, 0u);\n"
++            << "      " << op << "\n"
++            << "      ctx.write_vfpu_vector_with_destination_prefix(d, " << destination << "u, " << out_length << "u); }\n";
++        return out.str();
++    }
++    if (major == 0x35u || major == 0x3Du) { // lvl.q/lvr.q, svl.q/svr.q
++        const std::int32_t offset = static_cast<std::int16_t>(w & 0xFFFCu);
++        const std::uint32_t vector_register = ((w >> 16u) & 0x1Fu) | ((w & 1u) << 5u);
++        const bool right = (w & 2u) != 0u;
++        out << "    { const std::uint32_t vfpu_address = " << reg((w >> 21u) & 31u) << " + static_cast<std::uint32_t>("
++            << offset << ");\n"
++            << "      const std::uint32_t vfpu_lane = (vfpu_address >> 2u) & 3u;\n"
++            << "      float q[4]{};\n"
++            << "      ctx.read_vfpu_vector(q, " << vector_register << "u, 4u);\n";
++        if (major == 0x35u) {
++            if (!right)
++                out << "      for (std::uint32_t i = 0; i <= vfpu_lane; ++i) q[3u - i] = std::bit_cast<float>("
++                       "rt.memory().aot_load32(vfpu_address - 4u * i));\n";
++            else
++                out << "      for (std::uint32_t i = 0; i <= 3u - vfpu_lane; ++i) q[i] = std::bit_cast<float>("
++                       "rt.memory().aot_load32(vfpu_address + 4u * i));\n";
++            out << "      ctx.write_vfpu_vector(q, " << vector_register << "u, 4u); }\n";
++        } else {
++            if (!right)
++                out << "      for (std::uint32_t i = 0; i <= vfpu_lane; ++i) rt.memory().aot_store32("
++                       "vfpu_address - 4u * i, std::bit_cast<std::uint32_t>(q[3u - i]));\n";
++            else
++                out << "      for (std::uint32_t i = 0; i <= 3u - vfpu_lane; ++i) rt.memory().aot_store32("
++                       "vfpu_address + 4u * i, std::bit_cast<std::uint32_t>(q[i]));\n";
++            out << "    }\n";
++        }
++        return out.str();
++    }
++    return std::nullopt;
++}
++
+ bool is_branch(psprecomp::OpcodeKind kind) {
+     using K = psprecomp::OpcodeKind;
+     switch (kind) {
+@@ -845,6 +917,9 @@ std::string direct_unit_chain_expression(
+                 std::to_string(unit) + "u, " + std::to_string(found->second) + "u, " +
+                 psprecomp::hex32(target) + "u>(ctx, &aot_mem)";
+         }
++        // Not a registered entry, so its bucket may not have been emitted at
++        // all (e.g. a decoded JAL into data). Use the exact per-PC chain path.
++        return "(ctx.pc = " + psprecomp::hex32(target) + "u, rt.invoke_chained_call(ctx, &aot_mem))";
+     }
+     return "rt.invoke_chained_direct<&" + generated_unit_cpp_name(unit) + ", " +
+         std::to_string(unit) + "u>(ctx, &aot_mem)";
+@@ -1056,7 +1131,7 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
+                         if (target_is_import) {
+                             body << "    ctx.pc = " << psprecomp::hex32(target) << "u;\n"
+                                  << "    return;\n";
+-                            continue;
++                            break;
+                         }
+                         // Otherwise run the callee inline and resume locally only
+                         // if it came back to our return address.
+@@ -1116,16 +1191,18 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
+                 break;
+             }
+ 
+-            if (decoded.kind == psprecomp::OpcodeKind::Syscall ||
+-                decoded.kind == psprecomp::OpcodeKind::Vfpu ||
+-                decoded.kind == psprecomp::OpcodeKind::Unsupported) {
++            const auto extra_vfpu = decoded.kind == psprecomp::OpcodeKind::Vfpu
++                ? emit_extra_vfpu(decoded) : std::optional<std::string>{};
++            if (!extra_vfpu && (decoded.kind == psprecomp::OpcodeKind::Syscall ||
++                                decoded.kind == psprecomp::OpcodeKind::Vfpu ||
++                                decoded.kind == psprecomp::OpcodeKind::Unsupported)) {
+                 body << "    rt.unsupported(" << psprecomp::hex32(pc) << "u, "
+                      << psprecomp::hex32(decoded.word) << "u, \""
+                      << cpp_escape(decoded.mnemonic) << " not lowered yet\"); return;\n";
+                 break;
+             }
+ 
+-            body << emit_regular(decoded, pc);
++            body << (extra_vfpu ? *extra_vfpu : emit_regular(decoded, pc));
+             const std::uint32_t next = pc + 4u;
+             if (!function.instructions.contains(next)) {
+                 body << "    ctx.pc = " << psprecomp::hex32(next) << "u; return;\n";
+-- 
+2.43.0
+

@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000008 Mon Sep 17 00:00:00 2001
+From: Antigravity <antigravity@localhost>
+Date: Mon, 19 Oct 2026 12:00:00 -0400
+Subject: [PATCH 8/8] analysis: follow branch-delay-slot LUI targets and scheduled prologues
+
+Madden NFL 10 materializes callback pointers across branch delay slots (placing
+`lui reg, %hi(fn)` in a branch delay slot and finishing `addiu reg, reg, %lo(fn)`
+at the branch target) and separates some indirect-only functions with `b .`
+padding (`0x1000FFFF`) or schedules 1-2 non-branch instructions before
+`addiu sp, sp, -imm`. Seed both patterns during initial program analysis.
+---
+ src/program_analysis.cpp | 58 ++++++++++++++++++++++++++++++++--------
+ 1 file changed, 47 insertions(+), 11 deletions(-)
+
+diff --git a/src/program_analysis.cpp b/src/program_analysis.cpp
+--- a/src/program_analysis.cpp
++++ b/src/program_analysis.cpp
+@@ -245,25 +245,48 @@ void collect_materialized_code_pointers(const GuestMemory &memory,
+     // entry points. Scan a short straight-line window from every LUI as a
+     // conservative, architecture-wide supplement. Only values inside executable
+     // ranges become seeds, so data addresses and ordinary constants are ignored.
++    auto scan_window = [&](std::uint32_t pc, ConstantState constants, std::size_t max_steps) {
++        for (std::size_t count = 0; count < max_steps && is_executable_address(ranges, pc); ++count) {
++            const auto decoded = decode_allegrex(memory.load32(pc));
++            propagate_constant(decoded, pc, constants, seeds, ranges);
++            if (decoded.has_delay_slot()) {
++                if (is_executable_address(ranges, pc + 4u)) {
++                    const auto slot = decode_allegrex(memory.load32(pc + 4u));
++                    propagate_constant(slot, pc + 4u, constants, seeds, ranges);
++                }
++                break;
++            }
++            if (decoded.is_control_flow()) break;
++            pc += 4u;
++        }
++    };
++
+     for (const auto &range : ranges) {
+         for (std::uint32_t start = range.start; start + 4u <= range.end; start += 4u) {
+             const auto first = decode_allegrex(memory.load32(start));
+             if (first.kind != OpcodeKind::Lui || first.rt == 0u) continue;
+ 
+             ConstantState constants{};
+             clear_all_constants(constants);
+-            std::uint32_t pc = start;
+-            for (std::size_t count = 0; count < 24u && is_executable_address(ranges, pc); ++count) {
+-                const auto decoded = decode_allegrex(memory.load32(pc));
+-                propagate_constant(decoded, pc, constants, seeds, ranges);
+-                if (decoded.has_delay_slot()) {
+-                    if (is_executable_address(ranges, pc + 4u)) {
+-                        const auto slot = decode_allegrex(memory.load32(pc + 4u));
+-                        propagate_constant(slot, pc + 4u, constants, seeds, ranges);
+-                    }
+-                    break;
+-                }
+-                if (decoded.is_control_flow()) break;
+-                pc += 4u;
++            scan_window(start, constants, 24u);
++
++            // Compilers often place `lui reg, %hi(fn)` in the delay slot of a
++            // branch to a block that finishes `addiu reg, reg, %lo(fn)`.
++            if (start >= range.start + 4u) {
++                const auto prev = decode_allegrex(memory.load32(start - 4u));
++                if (is_conditional_branch(prev.kind) || prev.kind == OpcodeKind::J) {
++                    const std::uint32_t target = is_conditional_branch(prev.kind)
++                        ? branch_target(start - 4u, prev)
++                        : direct_jump_target(start - 4u, prev);
++                    if (is_executable_address(ranges, target)) {
++                        ConstantState branch_constants{};
++                        clear_all_constants(branch_constants);
++                        propagate_constant(first, start, branch_constants, seeds, ranges);
++                        scan_window(target, branch_constants, 24u);
++                    }
++                }
+             }
+         }
+     }
+@@ -317,12 +340,25 @@ std::map<std::uint32_t, std::string> collect_initial_seeds(const Elf32Image &elf
+     for (const auto &range : ranges) {
+         for (std::uint32_t pc = range.start; pc + 12u <= range.end; pc += 4u) {
+             if (memory.load32(pc) != 0x03E00008u) continue; // jr ra
+             std::uint32_t next = pc + 8u;
+-            while (next + 4u <= range.end && memory.load32(next) == 0u) next += 4u; // alignment nops
++            while (next + 4u <= range.end) {
++                const std::uint32_t pad = memory.load32(next);
++                if (pad == 0u) { next += 4u; continue; } // alignment nops
++                if (pad == 0x1000FFFFu && next + 8u <= range.end && memory.load32(next + 4u) == 0u) {
++                    next += 8u; continue; // compiler `b .` padding
++                }
++                break;
++            }
+             if (next + 4u > range.end) continue;
+-            const std::uint32_t word = memory.load32(next);
+-            // addiu sp, sp, -imm
+-            if ((word & 0xFFFF0000u) == 0x27BD0000u && (word & 0x8000u) != 0u)
+-                add_seed(seeds, ranges, next, "prologue_after_return");
++            for (std::uint32_t offset = 0u; offset <= 8u && next + offset + 4u <= range.end; offset += 4u) {
++                const std::uint32_t word = memory.load32(next + offset);
++                // addiu sp, sp, -imm (possibly preceded by 1-2 scheduled non-branch instructions)
++                if ((word & 0xFFFF0000u) == 0x27BD0000u && (word & 0x8000u) != 0u) {
++                    add_seed(seeds, ranges, next, "prologue_after_return");
++                    break;
++                }
++                if (decode_allegrex(word).is_control_flow()) break;
++            }
+         }
+     }
+     return seeds;
+-- 
+2.43.0
