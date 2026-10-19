@@ -1,0 +1,73 @@
+name: Deploy GitHub Pages
+
+# Publishes the documentation and the pinned ISO-only Madden NFL 10 player.
+# The player archive is a release asset verified against docs/PAGES_PLAYER.json
+# (SHA-256 + strict file allowlist); no ISO or savedata is ever involved.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+      - 'docs/**'
+      - 'profile/web/**'
+      - 'scripts/build_pages_site.py'
+      - 'scripts/install_pages_player.py'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Assemble documentation (player layout)
+        run: python scripts/build_pages_site.py --player --output build/pages-src
+
+      - name: Build Jekyll site
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: build/pages-src
+          destination: build/pages-site
+
+      - name: Download pinned player release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(python -c "import json;print(json.load(open('docs/PAGES_PLAYER.json'))['tag'])")
+          asset=$(python -c "import json;print(json.load(open('docs/PAGES_PLAYER.json'))['asset'])")
+          mkdir -p build/player
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir build/player
+          echo "PLAYER_ARCHIVE=build/player/$asset" >> "$GITHUB_ENV"
+
+      - name: Verify and install player at the site root
+        run: python scripts/install_pages_player.py --archive "$PLAYER_ARCHIVE" --site build/pages-site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/pages-site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

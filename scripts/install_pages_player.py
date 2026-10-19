@@ -26,9 +26,12 @@ def digest(stream):
     return result.hexdigest()
 
 
+SUPPORTED_DISCS = ('ULUS10440', 'ULUS10441')
+
+
 def read_config(path):
     data = json.loads(path.read_text(encoding='utf-8'))
-    if (data.get('format') != 1 or data.get('discId') != 'ULUS10440'
+    if (data.get('format') != 1 or data.get('discId') not in SUPPORTED_DISCS
             or not re.fullmatch(r'[0-9a-f]{64}', data.get('archiveSha256', ''))
             or not re.fullmatch(r'[0-9a-f]{40}', data.get('sourceCommit', ''))
             or not re.fullmatch(r'[A-Za-z0-9_.-]+', data.get('asset', ''))
@@ -57,7 +60,7 @@ def install(archive, site, config):
         if package.getinfo('static-manifest.json').file_size > 1024 * 1024:
             raise ValueError('Player manifest is too large.')
         manifest = json.loads(package.read('static-manifest.json'))
-        if manifest.get('format') != 1 or manifest.get('discId') != 'ULUS10440':
+        if manifest.get('format') != 1 or manifest.get('discId') != config['discId']:
             raise ValueError('Invalid player manifest identity.')
         files = manifest.get('files')
         if not isinstance(files, list) or not all(isinstance(item, dict) for item in files):
@@ -76,7 +79,7 @@ def install(archive, site, config):
                 raise ValueError('Player engine is not WebAssembly.')
         html = package.read('index.html').decode('utf-8')
         if ('window.PSPWEB_LOCAL_ISO' not in html or 'iso-only-v1' not in html
-                or 'ULUS10440' not in html or 'static_bootstrap.js' not in html):
+                or config['discId'] not in html or 'static_bootstrap.js' not in html):
             raise ValueError('Player page is not the verified ISO-only launcher.')
         targets = [site.joinpath(*PurePosixPath(name).parts) for name in names]
         if any(not target.resolve().is_relative_to(site.resolve()) for target in targets):
@@ -102,8 +105,9 @@ def main():
     site = args.site.resolve()
     if not site.is_relative_to(ROOT / 'build') or site == ROOT / 'build':
         parser.error('Pages output must be below build/.')
-    files = install(args.archive, site, read_config(args.config))
-    print(f'Installed {len(files)} verified player files for ULUS10440; no ISO or savedata.')
+    config = read_config(args.config)
+    files = install(args.archive, site, config)
+    print(f"Installed {len(files)} verified player files for {config['discId']}; no ISO or savedata.")
 
 
 if __name__ == '__main__':

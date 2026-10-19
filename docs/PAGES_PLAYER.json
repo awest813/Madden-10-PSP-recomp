@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "discId": "ULUS10440",
-  "tag": "player-20261018-04a2fd7",
-  "asset": "static-ncaa10-save-audit-20261018.zip",
-  "archiveSha256": "7b88952005feed1f97e8f3380bf509d1e4dedc02f5bbccbe1e77abdeb96117d8",
-  "sourceCommit": "04a2fd7f1469db739aa876758795d468f223b2c9"
+  "discId": "ULUS10441",
+  "tag": "player-20261019-e0e3340",
+  "asset": "static-madden10-20261019.zip",
+  "archiveSha256": "5f887308a812b1c9289303cfb99abff96e1b9347db704aec952608bbe990b930",
+  "sourceCommit": "e0e33408d5737f4f6ddca108d8fc0858bb826b9d"
 }

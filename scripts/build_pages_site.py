@@ -15,7 +15,7 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_REPOSITORY = 'awest813/NCAA-10-PSP-Recomp'
+DEFAULT_REPOSITORY = 'awest813/Madden-10-PSP-recomp'
 ROOT_PAGES = ('README.md', 'ENGINEERING_LOG.md', 'HANDOFF.md', 'AGENTS.md',
               'OTHER_RECOMPS.md', 'GITHUB_READY.md', 'THIRD_PARTY_NOTICES.md')
 MEDIA = ('docs/media/demo.webp', 'docs/media/demo.mp4')
@@ -27,8 +27,8 @@ LAUNCHER_FILES = ('index.html', 'launcher.js', 'launcher-sw.js', 'game/index.htm
 # built by scripts/build_translator.sh (PSPRecomp code generator + decrypter).
 TRANSLATOR_SOURCES = {'translate/local_iso.js': 'profile/web/local_iso.js'}
 TRANSLATOR_BUILD_FILES = ('pspweb_translator.js', 'pspweb_translator.wasm')
-SITE_TITLE = 'NCAA Football 10 PSP Web Recomp'
-SITE_DESCRIPTION = 'Static recompilation of NCAA Football 10 (PSP, ULUS10440) for the web'
+SITE_TITLE = 'Madden NFL 10 PSP Web Recomp'
+SITE_DESCRIPTION = 'Static recompilation of Madden NFL 10 (PSP, ULUS10441) for the web'
 NOTICE = ('> This site hosts the project documentation and a [launcher](play/) for your own build. '
           'It does not host the game, compiled game code, disc data or saves: the launcher imports a '
           'package you built locally and opens it with your ISO, all inside your browser. See '
@@ -112,7 +112,7 @@ def render_page(rewriter, source, text):
     if source == 'README.md':
         static = rewriter.target(source, 'docs/STATIC_HOSTING.md')
         heading, _, rest = body.partition('\n')
-        notice = (f'> Open the [ISO-only player](./). This site includes the compiled NCAA runtime and verified boot preload; '
+        notice = (f'> Open the [ISO-only player](./). This site includes the compiled Madden NFL 10 runtime and verified boot preload; '
                   f'bring your own matching ISO, which stays local. See [Static hosting]({static}).'
                   if rewriter.player else NOTICE.format(static=static))
         body = f'{heading}\n\n{notice}\n{rest}'
