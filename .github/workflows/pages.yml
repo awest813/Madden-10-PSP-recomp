@@ -54,7 +54,9 @@ jobs:
           echo "PLAYER_ARCHIVE=build/player/$asset" >> "$GITHUB_ENV"
 
       - name: Verify and install player at the site root
-        run: python scripts/install_pages_player.py --archive "$PLAYER_ARCHIVE" --site build/pages-site
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" build/pages-site
+          python scripts/install_pages_player.py --archive "$PLAYER_ARCHIVE" --site build/pages-site
 
       - uses: actions/configure-pages@v5
 
