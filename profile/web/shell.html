@@ -581,39 +581,51 @@
     'class PspOutput extends AudioWorkletProcessor {',
     '  constructor(options) {',
     '    super();',
-    '    this.queue = []; this.pos = 0; this.frames = 0; this.primed = false;',
+    // Fixed storage keeps chunk retention and Array.shift() out of the render
+    // callback, including when a producer delivers many tiny chunks.
+    '    this.buffer = new Float32Array(32768); this.read = 0; this.pos = 0; this.frames = 0; this.primed = false;',
     '    this.base = 44100 / options.processorOptions.rate; this.drift = 0; this.target = 4410; this.under = 0; this.blocks = 0;',
+    '    this.rate = options.processorOptions.rate; this.fadeLength = Math.max(1, Math.round(this.rate * 0.003));',
+    '    this.fade = 0; this.lastL = 0; this.lastR = 0; this.fromL = 0; this.fromR = 0;',
     '    this.received = 0; this.output = 0; this.over = 0; this.dropped = 0;',
     '    this.port.onmessage = (e) => {',
-    '      if (e.data.reset) { this.queue = []; this.pos = 0; this.frames = 0; this.primed = false; this.drift = 0; this.received = 0; this.output = 0; return; }',
-    '      this.queue.push(e.data); this.frames += e.data.length / 2; this.received += e.data.length / 2;',
-    '      const before = this.frames;',
-    '      while (this.frames > 44100 * 0.25 && this.queue.length > 1) {',
-    '        this.frames -= this.queue[0].length / 2 - Math.floor(this.pos); this.queue.shift(); this.pos = 0;',
-    '      }',
-    '      if (this.frames > 11025) { this.pos = this.queue[0].length / 2 - 11025; this.frames = 11025; }',
-    '      if (this.frames < before) { ++this.over; this.dropped += before - this.frames; }',
+    '      const data = e.data;',
+    '      if (data.reset) { this.read = 0; this.pos = 0; this.frames = 0; this.primed = false; this.drift = 0; this.received = 0; this.output = 0; this.blocks = 0; this.under = 0; this.over = 0; this.dropped = 0; this.fade = 0; this.lastL = this.lastR = 0; return; }',
+    '      if (!data.length || data.length % 2) return;',
+    '      const count = data.length / 2, drop = Math.max(0, this.frames + count - 11025);',
+    '      this.received += count;',
+    '      const old = Math.min(drop, this.frames), skip = drop - old;',
+    '      this.read = (this.read + old) & 16383; this.frames -= old;',
+    '      if (drop) { ++this.over; this.dropped += drop; this.pos = 0; this.bridge(); }',
+    '      const write = ((this.read + this.frames) & 16383) * 2;',
+    '      const samples = data.subarray(skip * 2), first = Math.min(samples.length, this.buffer.length - write);',
+    '      this.buffer.set(samples.subarray(0, first), write); this.buffer.set(samples.subarray(first), 0);',
+    '      this.frames += count - skip;',
     '    };',
     '  }',
+    '  bridge() { this.fade = this.fadeLength; this.fromL = this.lastL; this.fromR = this.lastR; }',
     '  process(inputs, outputs) {',
     '    const left = outputs[0][0], right = outputs[0][1] || outputs[0][0];',
     '    this.output += left.length;',
-    '    if (++this.blocks % 344 === 0) this.port.postMessage({ queued: this.frames, under: this.under, over: this.over, dropped: this.dropped, received: this.received, output: this.output });',
-    '    if (!this.primed) { if (this.frames < this.target) { left.fill(0); right.fill(0); return true; } this.primed = true; }',
+    '    this.blocks += left.length;',
+    '    if (this.blocks >= this.rate) { this.blocks -= this.rate; this.port.postMessage({ sentAt: Date.now(), queued: this.frames, under: this.under, over: this.over, dropped: this.dropped, received: this.received, output: this.output }); }',
+    '    if (!this.primed && this.frames >= this.target) { this.primed = true; this.bridge(); }',
     '    const error = Math.max(-1, Math.min(1, (this.frames - this.target) / this.target));',
-    '    this.drift = Math.max(-0.008, Math.min(0.008, this.drift + error * 0.00000025));',
+    '    if (this.primed) this.drift = Math.max(-0.008, Math.min(0.008, this.drift + error * 0.00000025 * left.length / 128 * 44100 / this.rate));',
     '    const step = this.base * (1 + Math.max(-0.01, Math.min(0.01, this.drift + error * 0.004)));',
     '    for (let i = 0; i < left.length; i++) {',
-    '      const chunk = this.queue[0];',
-    '      if (!chunk) { left[i] = right[i] = 0; if (this.primed) this.under++; this.primed = false; this.pos = 0; this.frames = 0; continue; }',
-    '      const whole = Math.floor(this.pos), at = whole * 2, f = this.pos - whole;',
-    '      const next = at + 2 < chunk.length ? chunk : this.queue[1], n = at + 2 < chunk.length ? at + 2 : 0;',
-    '      const l = chunk[at], r = chunk[at + 1];',
-    '      left[i] = next ? l + (next[n] - l) * f : l; right[i] = next ? r + (next[n + 1] - r) * f : r;',
-    '      this.pos += step;',
-    '      this.frames -= Math.floor(this.pos) - whole;',
-    '      while (this.queue.length && this.pos * 2 >= this.queue[0].length) { this.pos -= this.queue[0].length / 2; this.queue.shift(); }',
-    '      this.frames = Math.max(0, this.frames);',
+    '      let l = 0, r = 0;',
+    '      if (this.primed && !this.frames) { ++this.under; this.primed = false; this.pos = 0; this.drift = 0; this.bridge(); }',
+    '      if (this.primed) {',
+    '        const at = this.read * 2, next = this.frames > 1 ? ((this.read + 1) & 16383) * 2 : at;',
+    '        l = this.buffer[at] + (this.buffer[next] - this.buffer[at]) * this.pos;',
+    '        r = this.buffer[at + 1] + (this.buffer[next + 1] - this.buffer[at + 1]) * this.pos;',
+    '        this.pos += step; const used = Math.min(Math.floor(this.pos), this.frames);',
+    '        this.read = (this.read + used) & 16383; this.frames -= used; this.pos = this.frames ? this.pos - used : 0;',
+    '      }',
+    // Bridge only discontinuities. Steady playback retains its original PCM.
+    '      if (this.fade) { const f = --this.fade / this.fadeLength; l += (this.fromL - l) * f; r += (this.fromR - r) * f; }',
+    '      left[i] = this.lastL = l; right[i] = this.lastR = r;',
     '    }',
     '    return true;',
     '  }',
@@ -626,22 +638,33 @@
   updateSoundButton();
   function startSound() {
     if (document.hidden) return;
+    if (sound.context && sound.context.state === 'closed') {
+      sound.context = null; sound.node = null; sound.gain = null; sound.stats = null;
+    }
     if (sound.context) {
-      if (sound.context.state === 'suspended') sound.context.resume();
+      if (sound.context.state === 'suspended' || sound.context.state === 'interrupted')
+        sound.context.resume().catch(function (e) { console.warn('audio resume', e); });
       return;
     }
     var AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass || !window.AudioWorkletNode) return;
     // Let the device choose its native graph rate; the worklet already resamples
     // PSP PCM. Forcing 44.1 kHz adds a second resampling stage on 48 kHz devices.
-    try { sound.context = new AudioContextClass({ latencyHint: 'interactive' }); }
-    catch (e) { sound.context = new AudioContextClass(); }
+    try {
+      try { sound.context = new AudioContextClass({ latencyHint: 'interactive' }); }
+      catch (e) { sound.context = new AudioContextClass(); }
+    } catch (e) { console.warn('audio unavailable', e); return; }
+    var context = sound.context;
+    if (context.state === 'suspended' || context.state === 'interrupted')
+      context.resume().catch(function (e) { console.warn('audio resume', e); });
     var url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
-    sound.context.audioWorklet.addModule(url).then(function () {
-      sound.node = new AudioWorkletNode(sound.context, 'psp-output',
-        { outputChannelCount: [2], processorOptions: { rate: sound.context.sampleRate } });
+    context.audioWorklet.addModule(url).then(function () {
+      sound.node = new AudioWorkletNode(context, 'psp-output',
+        { outputChannelCount: [2], processorOptions: { rate: context.sampleRate } });
       sound.node.port.onmessage = function (e) {
-        var previous = sound.stats, now = performance.now();
+        // Timestamp at the worklet: reports queued during a busy guest callback
+        // can arrive together, making delivery time imply impossible rates.
+        var previous = sound.stats, now = Number.isFinite(e.data.sentAt) ? e.data.sentAt : performance.now();
         sound.stats = e.data;
         sound.stats.at = now;
         if (previous && now > previous.at && e.data.output > previous.output && e.data.received >= previous.received) {
@@ -651,10 +674,17 @@
           sound.stats.renderHz = (e.data.output - previous.output) * 1000 / (now - previous.at);
         }
       };
-      sound.gain = sound.context.createGain();
+      sound.gain = context.createGain();
       sound.gain.gain.value = sound.muted ? 0 : 1;
-      sound.node.connect(sound.gain).connect(sound.context.destination);
-    }).catch(function (e) { console.warn('audio unavailable', e); });
+      sound.node.connect(sound.gain).connect(context.destination);
+      // The tab can become hidden while addModule is still loading.
+      if (document.hidden) return context.suspend();
+    }).catch(function (e) {
+      if (sound.node) sound.node.disconnect();
+      sound.context = null; sound.node = null; sound.gain = null; sound.stats = null;
+      context.close().catch(function () {});
+      console.warn('audio unavailable', e);
+    }).finally(function () { URL.revokeObjectURL(url); });
   }
   ['pointerup', 'touchend', 'keydown', 'mousedown'].forEach(function (type) {
     window.addEventListener(type, startSound, { passive: true });
@@ -663,8 +693,14 @@
     sound.muted = !sound.muted;
     prefs.muted = sound.muted;
     savePrefs();
-    if (sound.gain) sound.gain.gain.value = sound.muted ? 0 : 1;
-    if (sound.node) sound.node.port.postMessage({ reset: true });
+    if (sound.gain) {
+      var gain = sound.gain.gain, now = sound.context.currentTime;
+      gain.cancelScheduledValues(now); gain.setValueAtTime(gain.value, now);
+      gain.linearRampToValueAtTime(sound.muted ? 0 : 1, now + 0.005);
+    }
+    // Keep the queued tail for the short mute ramp; unmute starts fresh.
+    if (!sound.muted && sound.node) sound.node.port.postMessage({ reset: true });
+    sound.stats = null;
     updateSoundButton();
   });
   Module.pspAudio = function (samples) {
@@ -676,6 +712,7 @@
   document.addEventListener('visibilitychange', function () {
     releaseInput();
     if (sound.node) sound.node.port.postMessage({ reset: true });
+    sound.stats = null;
     if (!sound.context) return;
     var action = document.hidden ? sound.context.suspend() : sound.context.resume();
     action.catch(function (e) { console.warn('audio visibility change', e); });

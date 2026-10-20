@@ -26,6 +26,10 @@ public:
         if (debt < -0.000001) return 0u;
         const auto steps = static_cast<unsigned>(std::clamp(std::floor((debt + 0.000001) / kPspVblankMs) + 1.0, 1.0, 2.0));
         next_ms_ += steps * kPspVblankMs;
+        // A moderate stall can exceed the two-step catch-up allowance without
+        // reaching the long-stall reset above. Discard that excess debt now so
+        // it cannot force several expensive catch-up callbacks in succession.
+        if (next_ms_ <= now_ms) next_ms_ = now_ms + kPspVblankMs;
         return steps;
     }
 private:
