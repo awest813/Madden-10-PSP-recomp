@@ -1,90 +1,232 @@
-# PSP Web Recomp
+# Madden NFL 10 PSP Web Recomp
 
-PSP games running in the browser without an emulator. The game's MIPS machine code is translated ahead of time into C++, compiled to WebAssembly, and linked against a small reimplementation of the PSP's operating system and graphics chip that draws with WebGL2.
+A browser port of **Madden NFL 10 for PSP (USA, ULUS10441)**, built on [PSP Web Recomp](https://github.com/snuri00/psp-web-recomp). The game's MIPS executable is translated ahead of time into C++, compiled to WebAssembly, and linked with a PSP runtime that provides graphics, audio, input, file access, and saves.
 
-<p align="center">
-  <img src="docs/media/demo.webp" alt="God of War: Chains of Olympus running in a browser" width="720">
-  <br>
-  <a href="docs/media/demo.mp4">Watch the full recording (1:46)</a>
-</p>
+**[Open the player](https://awest813.github.io/Madden-10-PSP-recomp/)** · [Build locally](#build-madden-from-a-fresh-checkout) · [Controls](#controls) · [Technical documentation](#documentation)
 
-The first title brought up this way is God of War: Chains of Olympus. It plays from boot through the menus, cutscenes and combat, at 60 frames per second in the scenes measured so far in Chrome and Firefox on a laptop, at up to four times the PSP's resolution, and on phones with on-screen touch controls. Music, speech and sound effects work. Movies are skipped for now.
+Bring your own matching, uncompressed PSP ISO. The player reads requested ranges from the selected file on your device; it does not upload your ISO. This is a title-specific recompilation, and selecting a different PSP game does not make it compatible.
 
-God of War: Ghost of Sparta followed through the same scripts. It needed the PSP's DRM decryption for one small file, a handful of system calls and a lighting fix, and no performance work: it runs at 55 to 60 frames per second at three times the native resolution.
+## Current status
 
-No game data is included here. You bring a disc image of a game you own, and the scripts in this repository turn it into a web page on your machine.
+The Madden build boots to the title screen in the browser. The latest documented smoke check observed nonzero audio output and intervals around 30 FPS at 100% guest speed. Startup and occasional callback stalls still cause audio starvation. That check covered boot and the title screen; extended gameplay, full matches, and all game modes remain unverified. See the [audio and frame pacing audit](docs/AUDIO_STUTTER_AUDIT.md) for measurements and their limits.
+
+The hosted player uses a **pinned release** recorded in [docs/PAGES_PLAYER.json](docs/PAGES_PLAYER.json). Source changes do not update that runtime until a new package is published and the pin is changed, so a local build can contain fixes absent from the hosted player.
+
+This fork also retains NCAA Football 10 support and its development notes. NCAA gameplay evidence and the inherited God of War demo are evidence for those titles, not Madden compatibility or performance guarantees.
+
+## Play in the browser
+
+1. Open the [player](https://awest813.github.io/Madden-10-PSP-recomp/) in a browser with WebAssembly, WebGL2, and service workers enabled.
+2. Select your **Madden NFL 10 PSP USA ISO (ULUS10441)**. The picker checks the disc identity and executable revision. ZIP, CSO, and ZSO files are unsupported in the picker.
+3. Keep the page active while it loads, then press **Enter** for Start. Interact with the page to enable browser audio.
+
+Select the ISO again after reloading. The hosted page supplies the compiled runtime and boot preload; players do not need a compiler or a separate disc server.
+
+### Controls
+
+| Keyboard | PSP input |
+| --- | --- |
+| Enter | Start |
+| Z / X | Cross / Circle |
+| A / S | Square / Triangle |
+| Arrow keys | D-pad |
+| I / J / K / L | Analog up / left / down / right |
+| Q / W | L / R shoulder buttons |
+| Shift | Select |
+| F | Toggle fullscreen |
+
+The web shell also supports gamepads and on-screen touch controls. Physical controller and device compatibility require testing on your hardware.
+
+### Saves
+
+Saves use browser storage for the current site address. Changing the domain, port, browser, or browser profile creates a separate save location. Clearing site data can remove saves.
+
+- Use **Export saves** to keep a ZIP backup before changing addresses or clearing storage.
+- Use **Import saves** to restore a ZIP containing `PSP/SAVEDATA/<slot>/` or `<slot>/`. Imports replace matching slots; export a backup first.
+- Saves from a PSP or PPSSPP may be encrypted. Importing a ZIP does not decrypt them.
+
+If the page reports a storage failure, export any new in-memory progress before reloading. A failed initial restore disables automatic writeback for that session to protect existing stored data.
+
+## Build Madden from a fresh checkout
+
+Run all commands from the repository root containing `scripts/` and `profile/`. In the original downloaded workspace, this is the inner `psp-web-recomp-main` folder.
+
+### Requirements
+
+- Git and Git Bash for the setup script on Windows.
+- Python 3, CMake, Ninja, and a C++20 compiler on `PATH`.
+- An installed and activated Emscripten SDK; setup selects version **6.0.10**.
+- Your matching Madden ISO and a **decrypted ELF executable** from that disc.
+- Disk space for the extracted disc, raw streaming image, generated C++, and build outputs.
+
+The Windows PowerShell script is the Madden build entry point. Native diagnostic builds additionally require EGL/OpenGL ES libraries; windowed native builds require SDL2.
+
+### 1. Fetch the framework and SDK
+
+In Git Bash:
+
+```bash
+git clone https://github.com/awest813/Madden-10-PSP-recomp.git
+cd Madden-10-PSP-recomp
+bash scripts/setup.sh
+```
+
+Setup fetches the pinned PSPRecomp revision, applies the patches in `patches/`, connects the web profile, installs Emscripten under `tools/emsdk`, and builds the native recompiler tools. If you already have an SDK, use `bash scripts/setup.sh --no-emsdk` and pass its location to the build command.
+
+### 2. Prepare the disc and decrypted executable
+
+In PowerShell, from the same repository root:
+
+```powershell
+python scripts/extract_iso.py "C:/path/to/Madden NFL 10.iso" games/madden10/root/disc
+
+# Copy your decrypted ELF dump, not the encrypted retail EBOOT.
+Copy-Item -LiteralPath "C:/path/to/decrypted/EBOOT.BIN" -Destination games/madden10/root/EBOOT.BIN
+
+python scripts/verify_madden10.py games/madden10/root
+```
+
+The build script does **not** decrypt the executable. Obtain a decrypted dump using PPSSPP's developer tools or a compatible decrypter. The optional `scripts/decrypt.sh` wrapper calls the tool named by `PSP_DECRYPT` as `tool <input> <output>`; it does not install a decrypter.
+
+Verification requires disc ID `ULUS10441` and this decrypted executable SHA-256:
+
+```text
+5c5064c142139b9bd9bb5fff7ab8421f8364cc188a86c2b6eca06ffd69735da3
+```
+
+A different region or executable revision needs its own verified port and generated sources.
+
+### 3. Compile and launch
+
+In PowerShell:
+
+```powershell
+./scripts/build_madden_web.ps1 `
+  -Iso "C:/path/to/Madden NFL 10.iso" `
+  -Emsdk ./tools/emsdk `
+  -Serve
+```
+
+Open **http://127.0.0.1:8622/** and select the matching ISO. The command builds the runtime, prepares a fresh timestamped static package, and serves its ISO picker.
+
+| Option | Purpose |
+| --- | --- |
+| `-Generate` | Regenerate the executable and EA audio-bank C++ sources |
+| `-Jobs 4` | Set parallel build jobs; default is 4 |
+| `-Emsdk <path>` | Select an SDK; the script otherwise defaults to `$env:USERPROFILE/emsdk` |
+| `-StaticOutput build/my-madden-player` | Package to a new directory under `build/` |
+| `-Serve` | Package and start the local server |
+| `-Port 8622` | Set the local server port; default is 8622 |
+
+Without `-Serve` or `-StaticOutput`, the script only builds. Missing generated sources are created automatically. The build also prepares the disc manifest and raw UMD backing image. Generated sources and game-derived outputs stay in ignored local directories.
+
+### Launch an existing build
+
+Create a new ISO-picker package from an existing web build:
+
+```powershell
+python scripts/prepare_static_madden.py --output build/static-madden10
+python scripts/serve.py build/static-madden10 8622
+```
+
+The packager refuses to overwrite an existing output directory. Choose a new name for subsequent packages.
+
+For development with the extracted disc streamed by the local server:
+
+```powershell
+python scripts/serve.py build/web-madden10/profiles/web 8622 --mount /disc=games/madden10/root/disc
+```
+
+Open the HTTP address rather than opening `index.html` directly. Add `?profile` to inspect frame timing and audio queue diagnostics.
+
+## Hosting and releases
+
+The static package includes title-specific WebAssembly and a verified decrypted boot preload. It omits the full ISO, extracted disc assets, and saves; the player supplies the ISO locally. These packages contain game-derived code and data, unlike the source checkout.
+
+Threaded WebAssembly needs cross-origin isolation. `scripts/serve.py` supplies the required headers and supports HTTP Range requests. For an HTTPS static host that supports custom headers, configure:
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+Cross-Origin-Resource-Policy: same-origin
+```
+
+The package includes `coi-serviceworker` for hosts without custom headers. Keep all runtime companions, notices, and licenses together when moving the package.
+
+The [Pages workflow](.github/workflows/pages.yml) builds documentation, downloads the release pinned in [PAGES_PLAYER.json](docs/PAGES_PLAYER.json), verifies its archive and companion files, and installs the player at the site root. Updating source alone keeps the pinned player. The [static hosting guide](docs/STATIC_HOSTING.md) explains the shared packaging and isolation design; its NCAA commands and URLs refer to the earlier NCAA port. Use the Madden commands above for this fork.
 
 ## How it works
 
-**Recompilation.** [PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) analyses the decrypted executable, finds its functions and emits C++ for them in translation units of 16 KiB of guest code each. That code runs against a register file and a model of the PSP's memory. This project adds a handful of fixes to PSPRecomp (in `patches/`) and a new target for it, the web profile in `profile/`.
+1. **Static recompilation:** PSPRecomp analyzes the decrypted Allegrex/MIPS executable and emits C++. EA audio-bank programs are also translated ahead of time.
+2. **WebAssembly:** Emscripten compiles the generated code and host runtime into the browser build.
+3. **PSP services:** The host implements threads, synchronization, memory, file I/O, controller input, audio, savedata, and utility dialogs.
+4. **Graphics and audio:** A GE display-list decoder renders through WebGL2, with a graphics worker where supported. PCM and decoded audio reach the browser through an AudioWorklet.
+5. **Disc access:** The player reads ISO file and sector ranges locally. Development builds can instead stream the extracted disc over HTTP.
 
-**A small PSP kernel.** Whatever the game asks of the PSP's operating system is answered by high-level emulation in `profile/host`: cooperative threads with semaphores, event flags and callbacks, memory partitions, the file system (with disc data streamed over HTTP Range requests, so only the executable is downloaded up front), the controller, audio output, saving and loading game progress, message dialogs, and the movie player's bookkeeping. Guest time advances in frames, so a game sees a steady 60 Hz however fast the host runs.
+The game executable runs as translated code, without a PSP CPU interpreter or JIT. Compatibility still depends on the runtime's PSP service and graphics implementations. Movie playback and other hardware behavior remain incomplete.
 
-**Graphics.** The GE, the PSP's graphics chip, is fed display lists. `ge.cpp` decodes them on the CPU, including vertex formats, skinning, lighting, texture generation, clipping and backface culling, and hands batched triangles and render state to `ge_gl.cpp`. There, framebuffers become WebGL render targets keyed by their place in VRAM, so effects that render to a texture and read it back stay on the GPU. Pixel format reinterpretation (games read 32-bit buffers as 16-bit textures and back), the PSP's stencil-in-alpha, fog and block transfers are emulated on the GPU as well, and everything can render at one to four times the native 480×272.
+### Repository layout
 
-**Two threads, like the PSP.** On the PSP the graphics chip works through one frame's display list while the CPU prepares the next, and games are written around that. Here the GE and its WebGL context run on a worker thread with an OffscreenCanvas: queuing a list returns at once and only the explicit sync calls wait. A frame costs whichever thread is busier rather than the sum of both.
+| Path | Contents |
+| --- | --- |
+| `profile/host/` | PSP services, renderer, audio, and native frontends |
+| `profile/web/` | Browser shell, local ISO reader, launcher, and static bootstrap |
+| `profile/tests/` | Host runtime regression tests |
+| `profile/translator/` | Browser executable decryption and translation tools |
+| `scripts/` | Setup, generation, build, packaging, serving, and checks |
+| `patches/` | Patches applied to the pinned PSPRecomp checkout |
+| `docs/` | Technical reports, reference comparisons, and hosting notes |
+| `PSPRecomp/` | Fetched compiler framework; ignored |
+| `games/madden10/` | Local disc, decrypted executable, manifest, and preload; ignored |
+| `profile/generated/madden10*` | Generated game and audio translations; ignored |
+| `build/` | Local binaries, packages, diagnostics, and test outputs; ignored |
 
-**Sound.** Sound effects come from a reimplementation of the PSP's voice synthesizer (32 voices of ADPCM with pitch and ADSR envelopes), music and speech from ATRAC3+ streams decoded with the FFmpeg decoder, and the mix goes to an AudioWorklet.
+## Documentation
 
-## Lessons from making it fast
+- [Audio and frame pacing audit](docs/AUDIO_STUTTER_AUDIT.md): Madden boot evidence, recent fixes, and remaining stalls.
+- [Runtime internals](docs/internals.md): architecture and debugging tools inherited from the base runtime.
+- [Static hosting](docs/STATIC_HOSTING.md): shared deployment design and earlier NCAA examples.
+- [NCAA Football 10 port](docs/NCAA10.md): separate title setup, gameplay evidence, and diagnostics.
+- [NCAA remaining gaps](docs/REMAINING_GAPS.md): title-specific acceptance checks.
+- [PPSSPP reference work](docs/PPSSPP_REFERENCE.md) and [GE replay performance](docs/GE_REPLAY_PERFORMANCE.md): renderer comparisons and measurement limits.
 
-The first playable build ran at 6 frames per second. Most of the way to 60 came from finding out where the time actually went rather than from making the renderer faster.
+### Build NCAA from a fresh checkout
 
-God of War swaps its framebuffer without waiting for the vertical blank, so with nothing to hold it back the game drew around eight frames for every one that reached the screen. Holding the thread that swaps twice within one blank until the next one, a trick PPSSPP also uses, cut the work per displayed frame by a factor of eight on its own.
+After the shared setup step, extract your NCAA Football 10 USA ISO to `games/ncaa10/root/disc` and place its decrypted executable at `games/ncaa10/root/EBOOT.BIN`. Then run:
 
-In WebAssembly, reading the clock through `std::chrono` goes through `clock_gettime` and a BigInt conversion in JavaScript. Profiling timers that read it per primitive took about a third of the frame until they were made to read `performance.now()` only when profiling is on.
-
-Firefox copies every WebGL buffer upload to its GPU process, and after any change to an index buffer it re-validates the whole buffer on the next draw. A shared 4 MB index ring therefore dropped Firefox to 3 frames per second; giving every draw a small index buffer of its own fixed it. The opposite fix, writing vertex data piece by piece into one large buffer, helped no browser and made phones stall, because mobile GPU drivers wait or copy when a buffer the GPU may still be reading is modified.
-
-The PSP keeps its stencil buffer in the framebuffer's alpha channel, and God of War uses it for projected shadows and to limit a blur pass. Mirroring stencil and alpha into each other with full-screen passes was correct but cost 60 million extra pixels per frame at 4×. Tracking which rectangles, which stencil bits and which constant values actually changed brought that down to about 7 million.
-
-Finally, God of War queues each frame's display list and keeps working on the next frame before it waits. Running the GE on its own thread turned the cost of a busy fight from game plus graphics, around 17 ms in Firefox, into the larger of the two, around 10 ms.
-
-## A second game
-
-Ghost of Sparta went from a ZIP to a page through `port.sh` without changes to the scripts or the recompiler, and then waited forever at boot. It opens a 176-byte file with the PSP's DRM flag, hands its key to `sceIoIoctl` and checks what it reads back. The file is in PGD, the format amctrl.prx decrypts with the KIRK crypto engine, and for disc games that comes down to AES-128 with three keys from KIRK's key vault: a CMAC-based check of the header and a counter mode for the data. `profile/host/pgd.cpp` implements it.
-
-The next problem was a white sky, and the menus had the same white haze. Bisecting the draws of one frame led to a cloud layer drawn with lighting on, whose opacity comes from the alpha of the global ambient light, a factor the lighting code had left out. Performance needed no work: a frame costs 6 to 8 ms, as in Chains of Olympus.
-
-## Port a game of your own
-
-You need git, CMake, Ninja, a C++20 compiler and Python 3. Everything has been run on Linux; macOS should be able to build the browser version but is untested, and the native test runner needs EGL and OpenGL ES headers (`libegl-dev` and `libgles-dev` on Debian and Ubuntu). Expect about 2 GB of disk space per game for the extracted disc, the generated code and the builds.
-
-```bash
-git clone https://github.com/snuri00/psp-web-recomp.git
-cd psp-web-recomp
-scripts/setup.sh                                   # PSPRecomp, the patches and the Emscripten SDK
-
-PSP_DECRYPT=/path/to/decrypter scripts/port.sh mygame "My Game.iso"
-scripts/serve.sh mygame                            # http://localhost:8613/
+```powershell
+python scripts/verify_ncaa10.py games/ncaa10/root
+./scripts/build_ncaa_web.ps1 -Iso "C:/path/to/NCAA Football 10.iso" -Emsdk ./tools/emsdk -Serve
 ```
 
-`port.sh` extracts the disc (an ISO, a ZIP containing one, or an already extracted folder), decrypts `PSP_GAME/SYSDIR/EBOOT.BIN`, translates it to C++, writes the manifest for streaming the rest of the disc and builds the page. It takes a few minutes; God of War goes from ZIP to playable page in about four on an 8-core laptop. Add `--native` to also build a headless runner that can dump frames to images and record audio, which is the quickest way to see how far a new game gets.
+Open **http://127.0.0.1:8621/**. This is the separate `ULUS10440` target; Madden and NCAA executables, generated sources, and disc files are not interchangeable. See [NCAA10.md](docs/NCAA10.md) for its controls and known limitations.
 
-Executables on retail discs are encrypted. `PSP_DECRYPT` names any tool that is called as `tool <in> <out>` and writes a plain ELF, such as DecEboot or pspdecrypt. PPSSPP can also dump a decrypted executable while it runs a game (Settings, Tools, Developer tools).
+## Checks and contributions
 
-Set your expectations accordingly: two games have been brought up so far, and both are Ready at Dawn titles built on the same engine, so they say little about how far a game from another studio gets. Another game will most likely stop at a system call nobody implemented yet, which is logged as `[hle] unimplemented ...`, or use a GE feature this renderer does not handle. [docs/internals.md](docs/internals.md) describes the tools for finding out what is missing, and the code is organized so that adding a call is a few lines.
+For documentation and Pages changes:
 
-## Saves
+```powershell
+python scripts/test_pages_site.py
+python scripts/test_pages_player.py
+```
 
-Games save the way they do on a PSP, into `PSP/SAVEDATA` on the memory stick, and the page keeps that folder in the browser's storage for the address you play from, so progress survives a reload. When a game asks you to pick a save slot, the page shows the slots with their icons and descriptions; arrow keys, a gamepad or a tap choose one.
+For browser runtime changes, relevant source-level checks include:
 
-Browser storage can be cleared along with a site's data, and it does not travel between browsers or devices. **Export saves** downloads everything as a ZIP file laid out like the PSP's `SAVEDATA` folder, and **Import saves** adds the saves from such a file. Saves copied from a real PSP or from PPSSPP are usually encrypted and will not load yet.
+```powershell
+node scripts/test_local_iso.mjs
+node scripts/test_web_input.mjs
+node scripts/test_web_audio.mjs
+node scripts/test_web_saves.mjs
+node scripts/test_web_persistence.mjs
+python scripts/test_static_package.py
+```
 
-## Hosting
+Synthetic checks do not establish game compatibility. When reporting a game issue, include the disc ID, source revision or release, browser, hardware, reproduction steps, and any `?profile` observations. Keep ISO files, decrypted executables, generated game code, memory dumps, and personal saves out of source contributions.
 
-The page uses SharedArrayBuffer for its threads, so it has to be served cross-origin isolated, with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. `scripts/serve.py` sends both headers and supports the Range requests the disc streaming relies on. To try it on a phone, put a tunnel in front of it, for example `cloudflared tunnel --url http://127.0.0.1:8613`, which passes the headers through. Anyone with the address can load the game while the tunnel runs, so keep it to yourself and stop it when you are done.
+## Credits and license
 
-Browsers that cannot draw WebGL2 on an OffscreenCanvas fall back to a single thread automatically; `?threads=0` forces that, and `?profile` adds a per-frame timing breakdown to the status bar.
+Based on [PSP Web Recomp](https://github.com/snuri00/psp-web-recomp) by Samir Nuri, using [PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp), Emscripten, and PSP hardware research from PPSSPP and JPCSP. The ATRAC decoder comes from PPSSPP's standalone FFmpeg sources; static isolation uses `coi-serviceworker`.
 
-## Legal
+Project code is available under the [MIT License](LICENSE). The ATRAC decoder retains its [LGPL 2.1-or-later license](profile/third_party/at3_standalone/COPYING.LGPLv2.1). See [third-party notices](THIRD_PARTY_NOTICES.md) for attribution and component details.
 
-This repository contains only original code, the PSPRecomp patches and third-party code under its own license. It contains no game code or data. The generated C++ and the built WebAssembly are translations of the game's executable, so they belong to the game's owners: keep them on your own machine and do not publish them. Use disc images of games you own. God of War is a trademark of Sony Interactive Entertainment; this project is not affiliated with or endorsed by Sony or any game publisher.
-
-## Credits
-
-PSPRecomp by its contributors (MIT) does the static recompilation. PPSSPP and JPCSP documented much of the hardware behavior emulated here, and PPSSPP's standalone copy of FFmpeg's ATRAC3/ATRAC3+ decoder is used for music and speech (LGPL 2.1 or later, in `profile/third_party/at3_standalone`). Emscripten builds the WebAssembly.
-
-## License
-
-The code in this repository is available under the MIT License, see [LICENSE](LICENSE). `profile/third_party/at3_standalone` keeps its LGPL 2.1 license.
+No game disc, decrypted executable, generated game translation, or compiled game runtime is included in the source repository. Use a disc image you own and have the right to use; game-derived outputs retain the rights of their respective owners. Madden NFL, NFL, EA, PSP, and other names belong to their respective owners. This project is not affiliated with or endorsed by EA, the NFL, Sony, or their partners.
